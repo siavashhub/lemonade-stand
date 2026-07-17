@@ -1,0 +1,23 @@
+{
+  "$schema-note": "Configured MCP servers. Managed by the app's Pantry UI, but hand-editable too. `enabled: false` entries are ignored at startup. Two transports: 'stdio' (spawns a subprocess) and 'http' (Streamable HTTP). Only enable servers you trust — their tools run with this app's privileges. Browse more tools to add in config/catalog.json.",
+  "servers": [
+    {
+      "id": "lemonade",
+      "transport": "http",
+      "url": "http://localhost:13305/mcp",
+      "enabled": true,
+      "note": "Your running lemond's own MCP gateway. Enabling this exposes lemonade_chat / lemonade_omni / lemonade_generate_image / lemonade_transcribe_audio / lemonade_list_models as tools to the agent. If lemond runs with LEMONADE_API_KEY, add an Authorization header in code/config."
+    },
+    {
+      "id": "filesystem",
+      "transport": "stdio",
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-filesystem",
+        "C:\\temp\\lemonade-stand"
+      ],
+      "enabled": true
+    }
+  ]
+}

@@ -1,0 +1,59 @@
+# Continuous integration.
+#
+# Runs on every push to main and on every pull request targeting main. Two jobs:
+#
+#   test          → type-check + unit tests + the filesystem MCP integration
+#                   test. Deterministic and network-light (only the `npx`
+#                   filesystem server, no model, no GPU). This is the gate you
+#                   want as a required status check for merging.
+#   test-optional → the opt-in `uvx`-based server tests (time, sqlite, git,
+#                   fetch). These need the `uv` toolchain and network access, so
+#                   they run separately and are allowed to fail without blocking
+#                   a merge (continue-on-error).
+#
+# Make the `test` job a required check in branch protection to enforce green
+# tests before merging to main.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: Type-check & core tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Type-check
+        run: npm run typecheck
+      - name: Run core tests (unit + filesystem MCP integration)
+        run: npm test
+
+  test-optional:
+    name: Optional MCP server tests (uvx)
+    runs-on: ubuntu-latest
+    # Non-blocking: a flaky download or upstream server change here must not
+    # stop a merge. Review its result, but don't gate on it.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - name: Install uv (provides uvx)
+        uses: astral-sh/setup-uv@v5
+      - name: Install dependencies
+        run: npm ci
+      - name: Run opt-in uvx server tests (time, sqlite, git, fetch)
+        run: npm run test:optional

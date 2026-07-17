@@ -1,0 +1,16 @@
+node_modules/
+out/
+out-types/
+dist/
+*.log
+.DS_Store
+
+# Local runtime config that may contain endpoints/keys — never commit.
+.env
+config/servers.local.json
+
+# Per-user app state (active model, etc.) written at runtime.
+config/settings.json
+
+# local tests
+temp/

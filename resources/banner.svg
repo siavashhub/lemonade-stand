@@ -1,0 +1,30 @@
+<svg width="1000" height="250" viewBox="0 0 1000 250" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Lemonade Stand — on-device MCP client and AI harness">
+  <rect width="1000" height="250" fill="#1a1a1e"/>
+  <!-- left leaf-green divider panel -->
+  <path d="M0 0 L300 0 L240 250 L0 250 Z" fill="#5aa14e"/>
+  <path d="M300 0 L318 0 L258 250 L240 250 Z" fill="#47823f"/>
+  <!-- booth icon -->
+  <g transform="translate(66 63) scale(1.9)">
+    <path d="M8 22 L56 22 L52 32 L12 32 Z" fill="#e05a5a"/>
+    <path d="M20 22 L16 32 L24 32 L28 22 Z" fill="#fff"/>
+    <path d="M36 22 L32 32 L40 32 L44 22 Z" fill="#fff"/>
+    <rect x="14" y="34" width="36" height="20" rx="1.5" fill="#c99a26"/>
+    <rect x="14" y="34" width="36" height="5" fill="#e6b93f"/>
+    <rect x="12" y="20" width="3" height="36" fill="#8a6a2e"/>
+    <rect x="49" y="20" width="3" height="36" fill="#8a6a2e"/>
+    <!-- sign: vector lemon inside a leaf-green ring -->
+    <circle cx="32" cy="44" r="7" fill="#fff4c2" stroke="#5aa14e" stroke-width="1.6"/>
+    <g transform="translate(32 44) rotate(-20)">
+      <ellipse cx="0" cy="0" rx="4.6" ry="3.1" fill="#f5c542"/>
+      <ellipse cx="0" cy="0" rx="4.6" ry="3.1" fill="none" stroke="#e6b93f" stroke-width="0.5"/>
+      <circle cx="4.6" cy="0" r="0.7" fill="#e6b93f"/>
+      <circle cx="-4.6" cy="0" r="0.7" fill="#e6b93f"/>
+      <ellipse cx="-1.3" cy="-1.2" rx="1.8" ry="0.8" fill="#fff4c2" opacity="0.7"/>
+      <path d="M3.2 -2.6 Q6.4 -4.4 7.2 -1.4 Q4.2 -0.6 3.2 -2.6 Z" fill="#5aa14e"/>
+    </g>
+  </g>
+  <!-- wordmark -->
+  <text x="360" y="118" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="58" font-weight="700" fill="#f5c542">Lemonade<tspan fill="#5aa14e"> Stand</tspan></text>
+  <!-- subtitle: spaced caps, centered under wordmark -->
+  <text x="588" y="158" text-anchor="middle" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="17" font-weight="500" fill="#9a9aa5" letter-spacing="2">ON-DEVICE  ·  MCP CLIENT  ·  AI HARNESS</text>
+</svg>

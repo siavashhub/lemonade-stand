@@ -1,0 +1,11 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "composite": true,
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "jsx": "react-jsx",
+    "types": ["react", "react-dom"],
+    "outDir": "./out-types/web"
+  },
+  "include": ["src/renderer/**/*", "src/shared/**/*", "src/preload/api.d.ts"]
+}

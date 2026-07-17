@@ -1,0 +1,84 @@
+{
+  "$schema-note": "The Pantry's Market: a curated list of MCP servers the user can stock. Enabling one materializes an entry in servers.json. `{{path}}` in args is replaced with a folder/file the user picks. Add your own entries here to grow the Market.",
+  "entries": [
+    {
+      "id": "lemonade",
+      "name": "Lemonade Gateway",
+      "blurb": "Your local lemond's own tools: chat, omni, image generation, audio transcription, and model listing. No install needed.",
+      "category": "Official",
+      "recommended": true,
+      "transport": "http",
+      "url": "http://localhost:13305/mcp",
+      "homepage": "https://github.com/lemonade-sdk/lemonade"
+    },
+    {
+      "id": "filesystem",
+      "name": "Filesystem",
+      "blurb": "Read and write files under a folder you choose. Lets the agent work with local documents and code.",
+      "category": "Files",
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "{{path}}"],
+      "needsPath": true,
+      "pathKind": "folder",
+      "pathLabel": "Root folder the agent may access",
+      "homepage": "https://github.com/modelcontextprotocol/servers/tree/main/src/filesystem"
+    },
+    {
+      "id": "fetch",
+      "name": "Web Fetch",
+      "blurb": "Fetch a URL and convert the page to clean markdown for the model to read.",
+      "category": "Web",
+      "transport": "stdio",
+      "command": "uvx",
+      "args": ["mcp-server-fetch"],
+      "homepage": "https://github.com/modelcontextprotocol/servers/tree/main/src/fetch"
+    },
+    {
+      "id": "git",
+      "name": "Git",
+      "blurb": "Inspect and operate on a local Git repository — status, diffs, log, and commits.",
+      "category": "Dev",
+      "transport": "stdio",
+      "command": "uvx",
+      "args": ["mcp-server-git", "--repository", "{{path}}"],
+      "needsPath": true,
+      "pathKind": "folder",
+      "pathLabel": "Git repository folder",
+      "homepage": "https://github.com/modelcontextprotocol/servers/tree/main/src/git"
+    },
+    {
+      "id": "memory",
+      "name": "Memory",
+      "blurb": "A persistent knowledge-graph memory the agent can write to and recall across turns.",
+      "category": "Memory",
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-memory"],
+      "homepage": "https://github.com/modelcontextprotocol/servers/tree/main/src/memory"
+    },
+    {
+      "id": "time",
+      "name": "Time",
+      "blurb": "Current time plus timezone conversions.",
+      "category": "Utility",
+      "transport": "stdio",
+      "command": "uvx",
+      "args": ["mcp-server-time"],
+      "homepage": "https://github.com/modelcontextprotocol/servers/tree/main/src/time"
+    },
+    {
+      "id": "sqlite",
+      "name": "SQLite",
+      "blurb": "Query and modify a local SQLite database file.",
+      "category": "Data",
+      "transport": "stdio",
+      "command": "uvx",
+      "args": ["mcp-server-sqlite", "--db-path", "{{path}}"],
+      "needsPath": true,
+      "pathKind": "file",
+      "pathLabel": "SQLite database file (.db)",
+      "homepage": "https://github.com/modelcontextprotocol/servers/tree/main/src/sqlite"
+    }
+  ]
+}

@@ -1,0 +1,112 @@
+# Release pipeline.
+#
+# Triggered when a semantic-version tag (e.g. v0.0.1) is pushed. The flow is:
+#
+#   gate    → validates the release notes file exists and the tag matches
+#             package.json (scripts/check-release.mjs), plus a type-check.
+#   audit   → scans npm dependencies for known vulnerabilities. Blocks the
+#             release if any high/critical advisory is found (npm audit).
+#   build   → builds and packages installers on Windows, macOS and Linux.
+#   release → creates the GitHub Release using releases/<tag>.md as the body
+#             and attaches every installer artifact.
+#
+# Both `gate` and `audit` are hard prerequisites for `build`, so no installer is
+# ever produced for a tag that lacks its releases/v<version>.md notes file or
+# that ships a known-vulnerable dependency.
+
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  gate:
+    name: Release gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - name: Enforce release notes + version/tag match
+        run: node scripts/check-release.mjs "${{ github.ref_name }}"
+      - name: Install dependencies
+        run: npm ci
+      - name: Type-check
+        run: npm run typecheck
+
+  audit:
+    name: Dependency vulnerability scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Scan npm dependencies for known vulnerabilities
+        run: npm run audit
+
+  build:
+    name: Build ${{ matrix.os }}
+    needs: [gate, audit]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            script: package:win
+          - os: macos-latest
+            script: package:mac
+          - os: ubuntu-latest
+            script: package:linux
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Package installer
+        run: npm run ${{ matrix.script }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Upload installers
+        uses: actions/upload-artifact@v4
+        with:
+          name: installers-${{ matrix.os }}
+          path: |
+            dist/*.exe
+            dist/*.dmg
+            dist/*.AppImage
+            dist/*.blockmap
+          if-no-files-found: warn
+
+  release:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download all installers
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ github.ref_name }}
+          body_path: releases/${{ github.ref_name }}.md
+          files: artifacts/**/*
+          fail_on_unmatched_files: true

@@ -1,0 +1,52 @@
+appId: com.lemonadestand.app
+productName: Lemonade Stand
+
+# electron-vite compiles the three targets into out/. electron-builder then
+# packs out/, package.json (for the version + main entry) and the production
+# node_modules into an installer. buildResources holds the app icons.
+directories:
+  buildResources: resources
+  output: dist
+
+files:
+  - out/**
+  - package.json
+
+# Bundle the config/ defaults and app icons alongside the binary so a fresh
+# install has the Market catalogue, phrases and server defaults.
+extraResources:
+  - from: config
+    to: config
+  - from: resources
+    to: resources
+
+# Deterministic artifact names that carry the semantic version, e.g.
+# "Lemonade Stand-0.0.1-setup.exe".
+artifactName: ${productName}-${version}-${os}.${ext}
+
+win:
+  icon: resources/icon.ico
+  target:
+    - nsis
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  artifactName: ${productName}-${version}-setup.${ext}
+
+mac:
+  icon: resources/icon.png
+  category: public.app-category.developer-tools
+  target:
+    - dmg
+
+linux:
+  icon: resources/icon.png
+  category: Development
+  target:
+    - AppImage
+
+# Skip the auto-publish step: our GitHub Actions workflow uploads the artifacts
+# to the Release explicitly, so electron-builder should only build them.
+publish: null
