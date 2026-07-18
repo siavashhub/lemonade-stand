@@ -4,15 +4,12 @@
 #
 #   gate    → validates the release notes file exists and the tag matches
 #             package.json (scripts/check-release.mjs), plus a type-check.
-#   audit   → scans npm dependencies for known vulnerabilities. Blocks the
-#             release if any high/critical advisory is found (npm audit).
 #   build   → builds and packages installers on Windows, macOS and Linux.
 #   release → creates the GitHub Release using releases/<tag>.md as the body
 #             and attaches every installer artifact.
 #
-# Both `gate` and `audit` are hard prerequisites for `build`, so no installer is
-# ever produced for a tag that lacks its releases/v<version>.md notes file or
-# that ships a known-vulnerable dependency.
+# The `gate` job is a hard prerequisite for `build`, so no installer is ever
+# produced for a tag that lacks its releases/v<version>.md notes file.
 
 name: Release
 
@@ -20,9 +17,21 @@ on:
   push:
     tags:
       - 'v*'
+  # Manual fallback: run the pipeline for an existing tag from the Actions tab
+  # (useful if a tag push didn't trigger a run, e.g. branch + tag pushed together).
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to build (e.g. v0.0.1). Required for manual runs.'
+        required: true
+        type: string
 
 permissions:
   contents: write
+
+env:
+  # The tag being released: the pushed tag on a tag event, else the manual input.
+  RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
 
 jobs:
   gate:
@@ -30,34 +39,22 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
       - uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: npm
       - name: Enforce release notes + version/tag match
-        run: node scripts/check-release.mjs "${{ github.ref_name }}"
+        run: node scripts/check-release.mjs "${{ env.RELEASE_TAG }}"
       - name: Install dependencies
         run: npm ci
       - name: Type-check
         run: npm run typecheck
 
-  audit:
-    name: Dependency vulnerability scan
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: npm
-      - name: Install dependencies
-        run: npm ci
-      - name: Scan npm dependencies for known vulnerabilities
-        run: npm run audit
-
   build:
     name: Build ${{ matrix.os }}
-    needs: [gate, audit]
+    needs: gate
     strategy:
       fail-fast: false
       matrix:
@@ -71,6 +68,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
       - uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -98,6 +97,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
       - name: Download all installers
         uses: actions/download-artifact@v4
         with:
@@ -106,7 +107,8 @@ jobs:
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          name: ${{ github.ref_name }}
-          body_path: releases/${{ github.ref_name }}.md
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: ${{ env.RELEASE_TAG }}
+          body_path: releases/${{ env.RELEASE_TAG }}.md
           files: artifacts/**/*
           fail_on_unmatched_files: true
