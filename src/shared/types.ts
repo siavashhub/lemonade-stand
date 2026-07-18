@@ -218,6 +218,10 @@ export type AgentEvent =
   // The model created or revised its working plan via the built-in `update_plan`
   // tool. `steps` is the full, current checklist the renderer should display.
   | { type: 'plan_updated'; steps: PlanStep[] }
+  // Live per-category context usage for the in-flight turn, so the usage badge
+  // reflects the real prompt size (including tool calls/results) while the agent
+  // works — not just the committed chat history.
+  | { type: 'context_usage'; breakdown: ContextBreakdown }
   // The agent used up its step budget without finishing. Main is blocked
   // awaiting the user's choice; the renderer must call respondStepLimit(id, ...)
   // to either grant another budget or stop.

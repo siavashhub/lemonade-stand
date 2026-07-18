@@ -140,6 +140,9 @@ export class Agent {
       // finish unfinished steps, so a premature stop can be caught and resumed.
       let currentPlan: PlanStep[] = []
       let finishNudges = 0
+      // Seed the badge with the starting prompt size (system + tools) before the
+      // first model call, so it reflects reality from the outset.
+      await this.emitUsage(messages, tools, emit)
       for (;;) {
         // The user asked to halt: stop before starting more work.
         if (signal?.aborted) {
@@ -243,6 +246,9 @@ export class Agent {
           // Track the latest plan so a premature stop can be detected against it.
           if (planned) currentPlan = planned
         }
+
+        // The prompt grew by this turn's tool calls/results — refresh the badge.
+        await this.emitUsage(messages, tools, emit)
 
         if (didRealWork) {
           step++
@@ -410,6 +416,25 @@ export class Agent {
       s.status === 'completed' ? '[x]' : s.status === 'in-progress' ? '[~]' : '[ ]'
     const lines = plan.map((s) => `${mark(s)} ${s.title}`).join('\n')
     return `${Agent.PLAN_PREFIX}\n${lines}`
+  }
+
+  /**
+   * Emit the live per-category context usage for the current in-flight prompt so
+   * the renderer's usage badge reflects the real size — tool calls and results
+   * included — instead of just the committed chat history. Best-effort: a failed
+   * estimate just skips this tick's update.
+   */
+  private async emitUsage(
+    messages: ChatCompletionMessageParam[],
+    tools: ChatCompletionTool[],
+    emit: (event: AgentEvent) => void
+  ): Promise<void> {
+    try {
+      const breakdown = await this.lemonade.contextBreakdown(messages, tools, this.systemPrompt)
+      emit({ type: 'context_usage', breakdown })
+    } catch {
+      // Non-fatal: the badge simply won't update on this iteration.
+    }
   }
 
   /**

@@ -736,6 +736,10 @@ export function App(): JSX.Element {
         // above the composer; it stays visible and updates in place as the
         // model works through the steps.
         setPlan(event.steps)
+      } else if (event.type === 'context_usage') {
+        // Live in-flight prompt size (tool calls/results included) — keep the
+        // usage badge honest while the agent works, not just between turns.
+        setBreakdown(event.breakdown)
       } else if (event.type === 'tool_approval_request') {
         setApprovals((a) => [
           ...a,
