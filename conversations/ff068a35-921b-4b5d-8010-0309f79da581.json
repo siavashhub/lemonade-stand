@@ -1,0 +1,28 @@
+{
+  "id": "ff068a35-921b-4b5d-8010-0309f79da581",
+  "title": "Exploring My Multimodal Capabilities",
+  "createdAt": 1784401441759,
+  "updatedAt": 1784401578308,
+  "messageCount": 2,
+  "model": "LMX-Omni-5.5B-Lite",
+  "history": [
+    {
+      "role": "user",
+      "content": "What tools do you have?"
+    },
+    {
+      "role": "assistant",
+      "content": "I have several tools available to help you! Here are the main categories:\n\n**AI & Generative Tools:**\n- **Image Generation** - Create new images from text descriptions\n- **Text-to-Speech** - Convert text to spoken audio\n- **AI Chat** - Chat with locally hosted LLMs\n- **Audio Transcription** - Transcribe audio files to text\n- **Multimodal Omni** - Handle complex tasks with text, images, and speech\n\n**File System Tools:**\n- **Read files** - View text and media files\n- **Write files** - Create or overwrite files with content\n- **Edit files** - Modify text files with specific line edits\n- **Create directories** - Make new folders or ensure directories exist\n- **List directories** - Get file listings with or without sizes\n- **Search files** - Find files by pattern across directories\n- **Move files** - Rename or move files between locations\n- **Get file info** - Retrieve metadata about files/directories\n\nI also have access to read/write within the directories you've allowed me to access. The specific directories available depend on your permissions.\n\nIs there something specific you'd like me to help you with?"
+    }
+  ],
+  "entries": [
+    {
+      "kind": "user",
+      "text": "What tools do you have?"
+    },
+    {
+      "kind": "assistant",
+      "text": "I have several tools available to help you! Here are the main categories:\n\n**AI & Generative Tools:**\n- **Image Generation** - Create new images from text descriptions\n- **Text-to-Speech** - Convert text to spoken audio\n- **AI Chat** - Chat with locally hosted LLMs\n- **Audio Transcription** - Transcribe audio files to text\n- **Multimodal Omni** - Handle complex tasks with text, images, and speech\n\n**File System Tools:**\n- **Read files** - View text and media files\n- **Write files** - Create or overwrite files with content\n- **Edit files** - Modify text files with specific line edits\n- **Create directories** - Make new folders or ensure directories exist\n- **List directories** - Get file listings with or without sizes\n- **Search files** - Find files by pattern across directories\n- **Move files** - Rename or move files between locations\n- **Get file info** - Retrieve metadata about files/directories\n\nI also have access to read/write within the directories you've allowed me to access. The specific directories available depend on your permissions.\n\nIs there something specific you'd like me to help you with?"
+    }
+  ]
+}
