@@ -64,6 +64,14 @@ const api: RendererApi = {
     return ipcRenderer.invoke('agent:check-health')
   },
 
+  getConnection() {
+    return ipcRenderer.invoke('agent:get-connection')
+  },
+
+  setConnection(opts: { baseUrl: string; apiKey: string }) {
+    return ipcRenderer.invoke('agent:set-connection', opts)
+  },
+
   getContextInfo() {
     return ipcRenderer.invoke('agent:context-info')
   },

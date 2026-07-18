@@ -186,7 +186,7 @@ Per user turn (`src/main/agent/loop.ts`):
 ### `.env` (copy from `.env.example`)
 | Var | Default | Meaning |
 |-----|---------|---------|
-| `LEMONADE_BASE_URL` | `http://localhost:8000/api/v1` | `lemond` OpenAI-compatible base (include `/api/v1`). |
+| `LEMONADE_BASE_URL` | `http://localhost:13305/api/v1` | `lemond` OpenAI-compatible base (include `/api/v1`). Also settable in-app via the server-status menu. |
 | `LEMONADE_API_KEY` | *(empty)* | Only if `lemond` was started with a key. |
 | `LEMONADE_MODEL` | `Qwen3-1.7B-GGUF` | Chat model; must exist in your server's registry. |
 | `AGENT_MAX_STEPS` | `8` | Max tool-calling iterations per turn. |

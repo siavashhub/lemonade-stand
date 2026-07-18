@@ -191,6 +191,9 @@ export function App(): JSX.Element {
   const [transcribing, setTranscribing] = useState(false)
   const [approvals, setApprovals] = useState<PendingApproval[]>([])
   const [serverStatus, setServerStatus] = useState<ServerStatus>('checking')
+  const [connectionOpen, setConnectionOpen] = useState(false)
+  const [connectionBusy, setConnectionBusy] = useState(false)
+  const [connectionError, setConnectionError] = useState<string | null>(null)
   const [context, setContext] = useState<ContextInfo | null>(null)
   const [contextEditorOpen, setContextEditorOpen] = useState(false)
   const [contextBusy, setContextBusy] = useState(false)
@@ -283,6 +286,26 @@ export function App(): JSX.Element {
       setContextError(String(err))
     } finally {
       setContextBusy(false)
+    }
+  }
+
+  // Point the app at a different Lemonade server. On success, persist happens in
+  // main; here we reflect the fresh online/offline result and re-pull anything
+  // that depends on the server (models, context budget, connected tools).
+  async function applyConnection(baseUrl: string, apiKey: string): Promise<void> {
+    setConnectionBusy(true)
+    setConnectionError(null)
+    try {
+      const result = await window.api.setConnection({ baseUrl, apiKey })
+      setServerStatus(result.online ? 'online' : 'offline')
+      refreshContext()
+      refreshTools()
+      if (result.online) setConnectionOpen(false)
+      else setConnectionError('Saved, but the server is still unreachable at that URL.')
+    } catch (err) {
+      setConnectionError(String(err))
+    } finally {
+      setConnectionBusy(false)
     }
   }
 
@@ -522,23 +545,34 @@ export function App(): JSX.Element {
           Lemonade Stand
         </span>
         <div className="topbar-right">
-          <span
-            className={`server-status ${serverStatus}`}
-            title={
-              serverStatus === 'online'
-                ? 'Lemonade server is running'
+          <div className="context-control">
+            <button
+              className={`server-status ${serverStatus}`}
+              onClick={() => setConnectionOpen((o) => !o)}
+              title={
+                (serverStatus === 'online'
+                  ? 'Lemonade server is running'
+                  : serverStatus === 'offline'
+                    ? 'Lemonade server is unreachable — start lemond to chat'
+                    : 'Checking Lemonade server…') + '\nClick to configure the connection'
+              }
+            >
+              <span className="server-dot" />
+              {serverStatus === 'online'
+                ? 'Server online'
                 : serverStatus === 'offline'
-                  ? 'Lemonade server is unreachable — start lemond to chat'
-                  : 'Checking Lemonade server…'
-            }
-          >
-            <span className="server-dot" />
-            {serverStatus === 'online'
-              ? 'Server online'
-              : serverStatus === 'offline'
-                ? 'Server offline'
-                : 'Checking…'}
-          </span>
+                  ? 'Server offline'
+                  : 'Checking…'}
+            </button>
+            {connectionOpen && (
+              <ConnectionEditor
+                busy={connectionBusy}
+                error={connectionError}
+                onApply={applyConnection}
+                onClose={() => setConnectionOpen(false)}
+              />
+            )}
+          </div>
           {context !== null && (
             <div className="context-control">
               <button
@@ -750,6 +784,89 @@ export function App(): JSX.Element {
 
 // A popover for changing the model's runtime context window. Reloads the model
 // on the server via /load, so applying can take a few seconds.
+// The connection editor popover: lets the user point the app at their Lemonade
+// server without touching env files. Prefilled with the currently active base
+// URL / key, which it fetches on mount. Saving persists the choice in main and
+// re-probes the server so the status pill updates immediately.
+function ConnectionEditor({
+  busy,
+  error,
+  onApply,
+  onClose
+}: {
+  busy: boolean
+  error: string | null
+  onApply: (baseUrl: string, apiKey: string) => void
+  onClose: () => void
+}): JSX.Element {
+  const [baseUrl, setBaseUrl] = useState('')
+  const [apiKey, setApiKey] = useState('')
+  const [loaded, setLoaded] = useState(false)
+
+  useEffect(() => {
+    window.api
+      .getConnection()
+      .then((c) => {
+        setBaseUrl(c.baseUrl)
+        setApiKey(c.apiKey)
+      })
+      .catch(() => {})
+      .finally(() => setLoaded(true))
+  }, [])
+
+  const valid = /^https?:\/\/.+/i.test(baseUrl.trim())
+
+  return (
+    <div className="context-editor" role="dialog" aria-label="Configure Lemonade server">
+      <div className="context-editor-head">
+        <strong>Lemonade server</strong>
+        <button className="context-editor-close" onClick={onClose} aria-label="Close">
+          ×
+        </button>
+      </div>
+      <p className="context-editor-note">
+        Point the app at your running <code>lemonade-server</code>. Use the OpenAI-compatible
+        base URL, including the <code>/api/v1</code> prefix. Default port is <code>13305</code>.
+      </p>
+      <label className="conn-label">
+        Base URL
+        <input
+          type="text"
+          placeholder="http://localhost:13305/api/v1"
+          value={baseUrl}
+          disabled={busy || !loaded}
+          spellCheck={false}
+          onChange={(e) => setBaseUrl(e.target.value)}
+        />
+      </label>
+      <label className="conn-label">
+        API key <span className="conn-optional">(optional)</span>
+        <input
+          type="password"
+          placeholder="Only if lemond was started with a key"
+          value={apiKey}
+          disabled={busy || !loaded}
+          spellCheck={false}
+          onChange={(e) => setApiKey(e.target.value)}
+        />
+      </label>
+      <div className="context-editor-row">
+        <button
+          className="context-apply"
+          disabled={!valid || busy || !loaded}
+          onClick={() => onApply(baseUrl, apiKey)}
+        >
+          {busy ? 'Connecting…' : 'Save & connect'}
+        </button>
+      </div>
+      {!valid && loaded && (
+        <p className="context-editor-err">Enter a full URL starting with http:// or https://.</p>
+      )}
+      {error && <p className="context-editor-err">{error}</p>}
+    </div>
+  )
+}
+
 function ContextEditor({
   info,
   busy,

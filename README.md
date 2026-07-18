@@ -49,6 +49,11 @@ Edit `.env` so `LEMONADE_BASE_URL` matches your server (include the `/api/v1`
 suffix), set `LEMONADE_MODEL` to a model your server can serve, and set
 `LEMONADE_API_KEY` only if you launched `lemond` with one.
 
+Lemonade Server listens on port **13305** by default, so the app defaults to
+`http://localhost:13305/api/v1`. You can also change the base URL and API key
+at any time from inside the app by clicking the **server-status** pill in the
+top bar — no `.env` edit or restart needed.
+
 ## Run
 
 ```powershell

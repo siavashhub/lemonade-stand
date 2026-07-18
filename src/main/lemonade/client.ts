@@ -66,6 +66,7 @@ export class LemonadeClient {
   private client: OpenAI
   private model: string
   private baseURL: string
+  private apiKey: string
   private contextOverride?: number
   private completionReserve: number
   // Cached server-reported context size, so we don't refetch every step. Only a
@@ -95,6 +96,7 @@ export class LemonadeClient {
     })
     this.model = model
     this.baseURL = baseURL
+    this.apiKey = apiKey
     this.contextOverride = contextOverride && contextOverride > 0 ? contextOverride : undefined
     this.completionReserve = completionReserve
   }
@@ -102,6 +104,28 @@ export class LemonadeClient {
   /** The id of the model currently configured as the agent's chat model. */
   get activeModel(): string {
     return this.model
+  }
+
+  /** The Lemonade server this client currently targets (base URL + API key),
+   * surfaced so the UI can show and edit the active connection. */
+  get connection(): { baseUrl: string; apiKey: string } {
+    return { baseUrl: this.baseURL, apiKey: this.apiKey }
+  }
+
+  /**
+   * Repoint this client at a different Lemonade server. Recreates the OpenAI
+   * client with the new base URL / key and clears every server-derived cache so
+   * nothing from the old server leaks across (context sizes, resolved TTS and
+   * transcription model ids). Callers persist the choice and re-probe health.
+   */
+  setConnection(baseURL: string, apiKey: string): void {
+    this.baseURL = baseURL
+    this.apiKey = apiKey
+    this.client = new OpenAI({ baseURL, apiKey: apiKey || 'lemonade' })
+    this.cachedServerContext = undefined
+    this.cachedMaxContext = undefined
+    this.cachedTtsModel = undefined
+    this.cachedTranscriptionModel = undefined
   }
 
   /**

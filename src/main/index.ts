@@ -258,6 +258,29 @@ ipcMain.handle('app:version', () => (app.isPackaged ? `v${app.getVersion()}` : '
 // Health probe for the renderer's server-status indicator.
 ipcMain.handle('agent:check-health', () => lemonade.health())
 
+// The Lemonade server connection (base URL + API key) the app currently targets,
+// so the renderer's connection editor can show what's active.
+ipcMain.handle('agent:get-connection', () => lemonade.connection)
+
+// Repoint the app at a different Lemonade server. Persists the choice so it
+// survives restarts, then probes the new server so the caller can immediately
+// reflect online/offline. Trims input and drops a trailing slash so
+// `${baseUrl}/health` never doubles up.
+ipcMain.handle(
+  'agent:set-connection',
+  async (_event, opts: { baseUrl: string; apiKey: string }) => {
+    const baseUrl = String(opts.baseUrl ?? '').trim().replace(/\/+$/, '')
+    const apiKey = String(opts.apiKey ?? '').trim()
+    if (!/^https?:\/\//i.test(baseUrl)) {
+      throw new Error('Enter a full base URL, e.g. http://localhost:13305/api/v1')
+    }
+    lemonade.setConnection(baseUrl, apiKey)
+    writeSettings(appPath, { baseUrl, apiKey })
+    const online = await lemonade.health()
+    return { baseUrl, apiKey, online }
+  }
+)
+
 // Effective context-window budget, surfaced in the UI.
 ipcMain.handle('agent:context-info', () => lemonade.getContextInfo())
 

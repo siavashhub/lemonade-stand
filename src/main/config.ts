@@ -68,17 +68,20 @@ export function loadConfig(cwd: string = process.cwd()): AppConfig {
     // No server config -> agent runs chat-only with no external tools.
   }
 
-  // The active model is remembered across restarts in settings.json. The model
-  // the user picks in the app's UI is an explicit choice, so it takes priority
-  // over LEMONADE_MODEL — which acts only as the *initial* default before the
-  // user has ever chosen one. Precedence: saved choice, then env default, then
-  // the built-in default.
-  const savedModel = readSettings(cwd).model
+  // Values the user sets in the app's UI (model, server connection) are
+  // remembered across restarts in settings.json. A UI choice is explicit, so it
+  // takes priority over the matching env var — which acts only as the *initial*
+  // default before the user has ever chosen one. Precedence for each:
+  // saved choice, then env default, then the built-in default.
+  const saved = readSettings(cwd)
 
   return {
-    lemonadeBaseUrl: process.env.LEMONADE_BASE_URL ?? 'http://localhost:8000/api/v1',
-    lemonadeApiKey: process.env.LEMONADE_API_KEY ?? '',
-    model: savedModel ?? process.env.LEMONADE_MODEL ?? 'Qwen3-1.7B-GGUF',
+    // 13305 is Lemonade Server's default port (its OpenAI-compatible routes live
+    // under /api/v1). Configurable in-app via the server-status menu, or by env.
+    lemonadeBaseUrl:
+      saved.baseUrl ?? process.env.LEMONADE_BASE_URL ?? 'http://localhost:13305/api/v1',
+    lemonadeApiKey: saved.apiKey ?? process.env.LEMONADE_API_KEY ?? '',
+    model: saved.model ?? process.env.LEMONADE_MODEL ?? 'Qwen3-1.7B-GGUF',
     maxSteps: Number(process.env.AGENT_MAX_STEPS ?? '8'),
     contextSize: process.env.LEMONADE_CONTEXT_SIZE
       ? Number(process.env.LEMONADE_CONTEXT_SIZE)
@@ -119,6 +122,11 @@ const SETTINGS_FILE = 'config/settings.json'
 export interface AppSettings {
   /** The model the user last loaded as the agent's chat model, if any. */
   model?: string
+  /** Base URL of the Lemonade server the user configured in-app, if any.
+   * Includes the OpenAI-compatible prefix, e.g. `http://localhost:13305/api/v1`. */
+  baseUrl?: string
+  /** API key the user configured in-app, if the server requires one. */
+  apiKey?: string
 }
 
 /** Read persisted UI/app settings. Missing or malformed file -> empty. */

@@ -153,6 +153,40 @@ body {
   user-select: none;
 }
 
+button.server-status {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 3px 8px;
+  cursor: pointer;
+}
+
+button.server-status:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.conn-label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.conn-label input {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  padding: 5px 8px;
+  font-size: 13px;
+}
+
+.conn-optional {
+  opacity: 0.7;
+}
+
 .server-dot {
   width: 8px;
   height: 8px;

@@ -186,6 +186,14 @@ export interface RendererApi {
   getAppVersion(): Promise<string>
   /** Ping the Lemonade server; true when it's reachable and healthy. */
   checkHealth(): Promise<boolean>
+  /** The Lemonade server connection (base URL + API key) the app targets. */
+  getConnection(): Promise<{ baseUrl: string; apiKey: string }>
+  /** Repoint the app at a different Lemonade server, persist it, and re-probe.
+   * Resolves with the saved connection plus its `online` health result. */
+  setConnection(opts: {
+    baseUrl: string
+    apiKey: string
+  }): Promise<{ baseUrl: string; apiKey: string; online: boolean }>
   /** Effective context-window budget for the current chat model. */
   getContextInfo(): Promise<ContextInfo>
   /** Reload the chat model with a new runtime context size (server `/load`).
