@@ -12,7 +12,7 @@ config/servers.local.json
 # Per-user app state (active model, etc.) written at runtime.
 config/settings.json
 
-# Saved conversations written at runtime (dev writes into the repo root).
+# Conversation history written at runtime (dev: project root, packaged: %APPDATA%).
 conversations/
 
 # local tests
