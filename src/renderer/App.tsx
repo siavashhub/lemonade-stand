@@ -6,27 +6,30 @@ import type {
   ApprovalDecision,
   CatalogEntry,
   ChatMessage,
+  ContextBreakdown,
   ContextInfo,
   McpServerState,
-  ModelInfo
+  ModelInfo,
+  PlanStep,
+  SessionSummary,
+  TranscriptEntry
 } from '@shared/types'
 import {
   ArchiveBoxIcon,
+  ClockIcon,
   CpuChipIcon,
   MicrophoneIcon,
   SpeakerWaveIcon,
   SpeakerXMarkIcon,
-  StopIcon
+  StopIcon,
+  StopSpeakingIcon,
+  TrashIcon
 } from './icons'
 
 // A "trace" line rendered in the transcript. Chat turns and tool activity share
-// the same visual stream so you can watch the agent think.
-type Entry =
-  | { kind: 'user'; text: string }
-  | { kind: 'assistant'; text: string }
-  | { kind: 'tool'; label: string; detail: string; ok?: boolean }
-  | { kind: 'warning'; text: string }
-  | { kind: 'error'; text: string }
+// the same visual stream so you can watch the agent think. Aliased to the shared
+// TranscriptEntry so a conversation can be saved and restored verbatim.
+type Entry = TranscriptEntry
 
 // A tool call awaiting the user's approval decision.
 interface PendingApproval {
@@ -44,15 +47,27 @@ type ServerStatus = 'checking' | 'online' | 'offline'
 // localStorage and applied via the data-theme attribute on <html>.
 type Theme = 'light' | 'dark'
 
+// The overlays that can be shown one-at-a-time: top-bar/footer popovers
+// (connection, context, usage) and the full modals (pantry, models, history).
+// A single active-panel value enforces that opening one closes any other.
+type Panel = 'connection' | 'context' | 'usage' | 'pantry' | 'models' | 'history'
+
 // Convert base64 audio from lemond's TTS into a playable object URL. Rejects
 // (rather than swallowing) so callers can surface a playback failure instead of
-// leaving the user wondering why it's silent.
-function playAudio(base64: string, format: string): Promise<void> {
+// leaving the user wondering why it's silent. The optional `register` callback
+// receives the live <audio> element before playback starts so callers can keep
+// a handle on it (e.g. to stop spoken replies mid-playback).
+function playAudio(
+  base64: string,
+  format: string,
+  register?: (audio: HTMLAudioElement) => void
+): Promise<void> {
   const mime = format === 'wav' ? 'audio/wav' : format === 'mp3' ? 'audio/mpeg' : `audio/${format}`
   const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0))
   const url = URL.createObjectURL(new Blob([bytes], { type: mime }))
   const audio = new Audio(url)
   audio.onended = () => URL.revokeObjectURL(url)
+  register?.(audio)
   return audio.play().catch((err) => {
     URL.revokeObjectURL(url)
     throw err
@@ -187,19 +202,35 @@ export function App(): JSX.Element {
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
   const [speak, setSpeak] = useState(false)
+  // True while a synthesized reply is actively playing, so the UI can offer a
+  // stop control (spoken replies are otherwise unstoppable once started).
+  const [speaking, setSpeaking] = useState(false)
   const [recording, setRecording] = useState(false)
   const [transcribing, setTranscribing] = useState(false)
   const [approvals, setApprovals] = useState<PendingApproval[]>([])
+  // Pending "keep going past the step limit?" prompt, or null when none.
+  const [stepLimit, setStepLimit] = useState<{ id: string; steps: number } | null>(null)
+  // The agent's current working plan (from the update_plan tool), shown in a
+  // sticky bar above the composer. Null when there's no active plan.
+  const [plan, setPlan] = useState<PlanStep[] | null>(null)
+  // Whether the sticky plan bar is expanded to show the full checklist.
+  const [planExpanded, setPlanExpanded] = useState(false)
   const [serverStatus, setServerStatus] = useState<ServerStatus>('checking')
-  const [connectionOpen, setConnectionOpen] = useState(false)
   const [connectionBusy, setConnectionBusy] = useState(false)
   const [connectionError, setConnectionError] = useState<string | null>(null)
   const [context, setContext] = useState<ContextInfo | null>(null)
-  const [contextEditorOpen, setContextEditorOpen] = useState(false)
   const [contextBusy, setContextBusy] = useState(false)
   const [contextError, setContextError] = useState<string | null>(null)
-  const [pantryOpen, setPantryOpen] = useState(false)
-  const [modelsOpen, setModelsOpen] = useState(false)
+  // Live per-category context usage for the indicator. Refreshed whenever the
+  // conversation or model context changes.
+  const [breakdown, setBreakdown] = useState<ContextBreakdown | null>(null)
+  const [compacting, setCompacting] = useState(false)
+  // Exactly one overlay (popover or modal) can be open at a time. Opening any
+  // panel replaces whatever was showing, so clicking a second control always
+  // dismisses the first — no stacking of windows on top of each other.
+  const [activePanel, setActivePanel] = useState<Panel | null>(null)
+  const togglePanel = (p: Panel): void => setActivePanel((cur) => (cur === p ? null : p))
+  const closePanel = (): void => setActivePanel(null)
   const [thinkingPhrases, setThinkingPhrases] = useState<string[]>([])
   const [thinkingPhrase, setThinkingPhrase] = useState('')
   const [thinkingTick, setThinkingTick] = useState(0)
@@ -207,12 +238,25 @@ export function App(): JSX.Element {
     () => (localStorage.getItem('theme') as Theme | null) ?? 'dark'
   )
   const [version, setVersion] = useState('')
+  // Saved-conversation state. `sessionId` identifies the live conversation being
+  // edited; `sessions` backs the history sidebar. `currentTitle` is the
+  // auto-generated title once the first exchange has happened.
+  const [sessions, setSessions] = useState<SessionSummary[]>([])
+  const [sessionId, setSessionId] = useState<string>(() => crypto.randomUUID())
+  const [currentTitle, setCurrentTitle] = useState('')
+  const createdAtRef = useRef<number>(Date.now())
+  // Set right before loading a saved session so the autosave effect skips the
+  // render caused purely by the load (which would otherwise bump updatedAt).
+  const suppressSaveRef = useRef(false)
   const scrollRef = useRef<HTMLDivElement>(null)
   // Active microphone recorder and the audio chunks it has produced so far.
   // Held in refs (not state) so the MediaRecorder callbacks always see the
   // latest values without re-rendering on every chunk.
   const recorderRef = useRef<MediaRecorder | null>(null)
   const chunksRef = useRef<Blob[]>([])
+  // The <audio> element for the spoken reply currently playing, if any. Held in
+  // a ref so it can be paused/stopped without threading it through render state.
+  const currentAudioRef = useRef<HTMLAudioElement | null>(null)
   // Set when the user halts a transcription via the stop button, so the aborted
   // request rejects quietly instead of surfacing as a transcription error.
   const transcribeCancelledRef = useRef(false)
@@ -238,16 +282,193 @@ export function App(): JSX.Element {
       .catch(() => setContext(null))
   }
 
+  // Recompute the per-category context usage for the live indicator. Cheap and
+  // local (a size estimate in main), so it's safe to call after every turn.
+  function refreshBreakdown(msgs: ChatMessage[]): void {
+    window.api
+      .getContextBreakdown(msgs)
+      .then(setBreakdown)
+      .catch(() => setBreakdown(null))
+  }
+
+  // The "Compact Conversation" button: summarize older messages on demand,
+  // adopt the compacted history, and note it in the transcript.
+  async function compactNow(): Promise<void> {
+    if (compacting || busy) return
+    setCompacting(true)
+    try {
+      const compacted = await window.api.compactHistory(history)
+      if (compacted) {
+        setHistory(compacted)
+        setEntries((e) => [
+          ...e,
+          { kind: 'warning', text: 'Compacted older messages to free up context.' }
+        ])
+        refreshBreakdown(compacted)
+      } else {
+        setEntries((e) => [
+          ...e,
+          { kind: 'warning', text: 'Nothing to compact yet — the conversation is still short.' }
+        ])
+      }
+      closePanel()
+    } catch (err) {
+      setEntries((e) => [...e, { kind: 'error', text: `Couldn't compact: ${String(err)}` }])
+    } finally {
+      setCompacting(false)
+    }
+  }
+
+  // Reload the saved-conversation list backing the history sidebar.
+  function refreshSessions(): void {
+    window.api.listSessions().then(setSessions).catch(() => setSessions([]))
+  }
+
+  // Persist the live conversation (model history + visual transcript) under the
+  // current session id. Called by the autosave effect once a turn settles.
+  function persistCurrent(): void {
+    if (history.length === 0) return
+    const firstUser = history.find((m) => m.role === 'user')
+    const title =
+      currentTitle || (firstUser?.content ?? 'New conversation').trim().slice(0, 60)
+    window.api
+      .saveSession({
+        id: sessionId,
+        title,
+        createdAt: createdAtRef.current,
+        updatedAt: Date.now(),
+        messageCount: history.length,
+        model: context?.model,
+        history,
+        entries
+      })
+      .then(setSessions)
+      .catch(() => {})
+  }
+
+  // Flush the current conversation, then reset to a fresh, empty session so the
+  // old one is preserved and a new topic starts clean.
+  function newSession(): void {
+    persistCurrent()
+    setEntries([])
+    setHistory([])
+    setCurrentTitle('')
+    createdAtRef.current = Date.now()
+    setSessionId(crypto.randomUUID())
+    setPlan(null)
+    setPlanExpanded(false)
+  }
+
+  // Load a saved conversation into the live view so the user can continue it.
+  // Saves whatever is current first so nothing is lost when switching.
+  function openSession(id: string): void {
+    if (id === sessionId) {
+      closePanel()
+      return
+    }
+    persistCurrent()
+    window.api
+      .loadSession(id)
+      .then((session) => {
+        if (!session) return
+        suppressSaveRef.current = true
+        setSessionId(session.id)
+        setCurrentTitle(session.title)
+        createdAtRef.current = session.createdAt
+        setEntries(session.entries)
+        setHistory(session.history)
+        setPlan(null)
+        setPlanExpanded(false)
+        closePanel()
+      })
+      .catch(() => {})
+  }
+
+  // Delete a saved conversation. If it's the one on screen, start fresh so the
+  // view doesn't keep re-saving a just-deleted session.
+  function removeSession(id: string): void {
+    window.api
+      .deleteSession(id)
+      .then((list) => {
+        setSessions(list)
+        if (id === sessionId) {
+          setEntries([])
+          setHistory([])
+          setCurrentTitle('')
+          createdAtRef.current = Date.now()
+          setSessionId(crypto.randomUUID())
+        }
+      })
+      .catch(() => {})
+  }
+
+  // Wipe all saved conversations and reset to a fresh, empty session.
+  function clearHistory(): void {
+    window.api
+      .clearSessions()
+      .then((list) => {
+        setSessions(list)
+        setEntries([])
+        setHistory([])
+        setCurrentTitle('')
+        createdAtRef.current = Date.now()
+        setSessionId(crypto.randomUUID())
+      })
+      .catch(() => {})
+  }
+
   useEffect(() => {
     refreshTools()
     window.api.getSpeak().then(setSpeak).catch(() => setSpeak(false))
     refreshContext()
+    refreshSessions()
     window.api.getAppVersion().then(setVersion).catch(() => setVersion(''))
     window.api
       .getThinkingPhrases()
       .then(setThinkingPhrases)
       .catch(() => setThinkingPhrases([]))
   }, [])
+
+  // Autosave the live conversation whenever a turn settles (busy clears) or the
+  // title arrives. Skips the render triggered purely by loading a saved session
+  // so merely viewing an old chat doesn't bump its timestamp.
+  useEffect(() => {
+    if (suppressSaveRef.current) {
+      suppressSaveRef.current = false
+      return
+    }
+    if (busy || history.length === 0) return
+    persistCurrent()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [history, busy, currentTitle])
+
+  // Once the first full exchange exists, ask the model for a short title. Best
+  // effort and non-blocking; failures leave the trimmed-first-message fallback.
+  useEffect(() => {
+    if (currentTitle || busy) return
+    const hasUser = history.some((m) => m.role === 'user')
+    const hasAssistant = history.some((m) => m.role === 'assistant')
+    if (!hasUser || !hasAssistant) return
+    let cancelled = false
+    window.api
+      .suggestTitle(history)
+      .then((title) => {
+        if (!cancelled && title) setCurrentTitle(title)
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [history, busy, currentTitle])
+
+  // Keep the context-usage indicator current: recompute the per-category split
+  // whenever the conversation settles or the model's context window changes.
+  useEffect(() => {
+    if (busy) return
+    refreshBreakdown(history)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [history, busy, context?.contextSize, tools.length])
 
   // While the agent is working — or audio is being transcribed — cycle a fresh
   // playful phrase. The first phrase is picked when the work starts; subsequent
@@ -281,7 +502,7 @@ export function App(): JSX.Element {
         source: info.source
       })
       if (info.error) setContextError(info.error)
-      else setContextEditorOpen(false)
+      else closePanel()
     } catch (err) {
       setContextError(String(err))
     } finally {
@@ -300,7 +521,7 @@ export function App(): JSX.Element {
       setServerStatus(result.online ? 'online' : 'offline')
       refreshContext()
       refreshTools()
-      if (result.online) setConnectionOpen(false)
+      if (result.online) closePanel()
       else setConnectionError('Saved, but the server is still unreachable at that URL.')
     } catch (err) {
       setConnectionError(String(err))
@@ -333,7 +554,7 @@ export function App(): JSX.Element {
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight })
-  }, [entries, approvals, busy])
+  }, [entries, approvals, busy, stepLimit])
 
   // Persistent listener for synthesized speech. TTS is fire-and-forget in the
   // main process, so the 'audio' event often arrives *after* the per-turn
@@ -345,11 +566,26 @@ export function App(): JSX.Element {
       if (window.api.debug) {
         console.log(`[tts] renderer received audio event: ${event.base64.length} b64 chars`)
       }
-      void playAudio(event.base64, event.format)
+      void playAudio(event.base64, event.format, (audio) => {
+        // A newer reply supersedes any still-playing one: stop the old audio so
+        // replies don't overlap, then track the new element and mark us speaking.
+        currentAudioRef.current?.pause()
+        currentAudioRef.current = audio
+        setSpeaking(true)
+        const clear = (): void => {
+          if (currentAudioRef.current === audio) {
+            currentAudioRef.current = null
+            setSpeaking(false)
+          }
+        }
+        audio.addEventListener('ended', clear)
+        audio.addEventListener('pause', clear)
+      })
         .then(() => {
           if (window.api.debug) console.log('[tts] renderer playback started')
         })
         .catch((err) => {
+          setSpeaking(false)
           console.error('[tts] renderer playback failed:', err)
           setEntries((e) => [
             ...e,
@@ -365,9 +601,29 @@ export function App(): JSX.Element {
     setApprovals((a) => a.filter((p) => p.id !== id))
   }
 
+  // Answer the "keep going past the step limit?" prompt. Continuing grants the
+  // agent another budget; stopping ends the turn.
+  function decideContinue(cont: boolean): void {
+    if (stepLimit) window.api.respondStepLimit(stepLimit.id, cont)
+    setStepLimit(null)
+  }
+
   async function toggleSpeak(): Promise<void> {
     const next = await window.api.setSpeak(!speak)
     setSpeak(next)
+    // Turning spoken replies off should also silence anything mid-playback.
+    if (!next) stopSpeaking()
+  }
+
+  // Halt the spoken reply currently playing (if any). Pausing fires the 'pause'
+  // listener wired up in the audio handler, which clears the ref and state.
+  function stopSpeaking(): void {
+    const audio = currentAudioRef.current
+    if (!audio) return
+    audio.pause()
+    audio.currentTime = 0
+    currentAudioRef.current = null
+    setSpeaking(false)
   }
 
   // Transcribe the just-finished recording and drop the recognized text into
@@ -451,6 +707,9 @@ export function App(): JSX.Element {
     if (!text || busy) return
     setInput('')
     setBusy(true)
+    // Clear any previous turn's plan so the sticky bar reflects only this turn.
+    setPlan(null)
+    setPlanExpanded(false)
 
     const userMsg: ChatMessage = { role: 'user', content: text }
     const nextHistory = [...history, userMsg]
@@ -476,21 +735,42 @@ export function App(): JSX.Element {
           ...e,
           { kind: 'tool', label: `${event.server} ← ${event.tool}`, detail: event.preview, ok: event.ok }
         ])
+      } else if (event.type === 'plan_updated') {
+        // The model laid out or revised its plan. Drive the sticky plan bar
+        // above the composer; it stays visible and updates in place as the
+        // model works through the steps.
+        setPlan(event.steps)
+      } else if (event.type === 'context_usage') {
+        // Live in-flight prompt size (tool calls/results included) — keep the
+        // usage badge honest while the agent works, not just between turns.
+        setBreakdown(event.breakdown)
       } else if (event.type === 'tool_approval_request') {
         setApprovals((a) => [
           ...a,
           { id: event.id, server: event.server, tool: event.tool, args: event.args }
         ])
+      } else if (event.type === 'step_limit_request') {
+        setStepLimit({ id: event.id, steps: event.steps })
       } else if (event.type === 'context_warning') {
         const usable = event.contextSize - event.reserve
         const text = event.overflow
           ? `Request too large: ~${event.estimatedTokens} tokens exceed the usable ${usable} of ${event.contextSize} (reserving ${event.reserve} for the reply). It was not sent — shorten the chat, disable tools, or raise the context size.`
           : `Heads up: this request is ~${event.estimatedTokens} tokens, close to the usable ${usable}-token limit (context ${event.contextSize}).`
         setEntries((e) => [...e, { kind: 'warning', text }])
+      } else if (event.type === 'history_compacted') {
+        // The agent summarized older messages to reclaim context. Adopt the
+        // compacted model-facing history; new assistant turns from this same
+        // reply are still appended on 'done'. The visual transcript is kept.
+        setHistory(event.messages)
+        setEntries((e) => [
+          ...e,
+          { kind: 'warning', text: 'Compacted older messages to free up context.' }
+        ])
       } else if (event.type === 'error') {
         setEntries((e) => [...e, { kind: 'error', text: event.message }])
       } else if (event.type === 'done') {
         off()
+        setStepLimit(null)
         setHistory((h) => [...h, ...collected])
         setBusy(false)
       }
@@ -544,61 +824,26 @@ export function App(): JSX.Element {
           </svg>
           Lemonade Stand
         </span>
-        <div className="topbar-right">
-          <div className="context-control">
+        <div className="topbar-center">
+          <div className="session-seg">
             <button
-              className={`server-status ${serverStatus}`}
-              onClick={() => setConnectionOpen((o) => !o)}
-              title={
-                (serverStatus === 'online'
-                  ? 'Lemonade server is running'
-                  : serverStatus === 'offline'
-                    ? 'Lemonade server is unreachable — start lemond to chat'
-                    : 'Checking Lemonade server…') + '\nClick to configure the connection'
-              }
+              className="session-seg-btn primary"
+              onClick={newSession}
+              disabled={busy}
+              title="Save this chat and start a new one"
             >
-              <span className="server-dot" />
-              {serverStatus === 'online'
-                ? 'Server online'
-                : serverStatus === 'offline'
-                  ? 'Server offline'
-                  : 'Checking…'}
+              ＋ New Session
             </button>
-            {connectionOpen && (
-              <ConnectionEditor
-                busy={connectionBusy}
-                error={connectionError}
-                onApply={applyConnection}
-                onClose={() => setConnectionOpen(false)}
-              />
-            )}
+            <button
+              className="session-seg-btn"
+              onClick={() => setActivePanel('history')}
+              title="Browse and continue past conversations"
+            >
+              <ClockIcon /> History
+            </button>
           </div>
-          {context !== null && (
-            <div className="context-control">
-              <button
-                className="context-size"
-                onClick={() => setContextEditorOpen((o) => !o)}
-                title={
-                  `Model context window: ${context.contextSize.toLocaleString()} tokens` +
-                  (context.maxContextWindow
-                    ? ` (max ${context.maxContextWindow.toLocaleString()})`
-                    : '') +
-                  '\nClick to change'
-                }
-              >
-                {context.contextSize.toLocaleString()} ctx ▾
-              </button>
-              {contextEditorOpen && (
-                <ContextEditor
-                  info={context}
-                  busy={contextBusy}
-                  error={contextError}
-                  onApply={applyContextSize}
-                  onClose={() => setContextEditorOpen(false)}
-                />
-              )}
-            </div>
-          )}
+        </div>
+        <div className="topbar-right">
           <button
             className="speak-toggle"
             onClick={() => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))}
@@ -608,30 +853,17 @@ export function App(): JSX.Element {
             {theme === 'dark' ? '☀️' : '🌙'}
           </button>
           <button
-            className={`speak-toggle ${speak ? 'on' : ''}`}
-            onClick={() => void toggleSpeak()}
-            title={speak ? 'Spoken replies on' : 'Spoken replies off'}
-            aria-label={speak ? 'Spoken replies on' : 'Spoken replies off'}
-          >
-            {speak ? <SpeakerWaveIcon /> : <SpeakerXMarkIcon />}
-          </button>
-          <button
-            className="pantry-toggle"
-            onClick={() => setModelsOpen(true)}
-            title="Choose the model the agent runs on"
-          >
-            <CpuChipIcon /> Models
-          </button>
-          <button
-            className="pantry-toggle"
-            onClick={() => setPantryOpen(true)}
-            title="Open the Pantry — stock tools & skills"
+            className="pantry-toggle pantry-toggle-primary"
+            onClick={() => setActivePanel('pantry')}
+            title={`Open the Pantry — stock tools & skills (${tools.length} tool${
+              tools.length === 1 ? '' : 's'
+            } connected)`}
           >
             <ArchiveBoxIcon /> Pantry
+            <span className="tools-badge" title={`${tools.length} tool${tools.length === 1 ? '' : 's'} connected`}>
+              {tools.length}
+            </span>
           </button>
-          <span className="tools-count">
-            {tools.length} tool{tools.length === 1 ? '' : 's'} connected
-          </span>
           <div className="window-controls">
             <button
               className="win-btn"
@@ -711,9 +943,33 @@ export function App(): JSX.Element {
             </div>
           </div>
         ))}
+
+        {stepLimit && (
+          <div className="approval">
+            <div className="approval-head">
+              The agent has run {stepLimit.steps} steps without finishing. Keep going?
+            </div>
+            <div className="approval-actions">
+              <button className="ok" onClick={() => decideContinue(true)}>
+                Continue
+              </button>
+              <button className="deny" onClick={() => decideContinue(false)}>
+                Stop
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
-      <div className="composer">
+      {plan && plan.length > 0 && (
+        <PlanBar
+          steps={plan}
+          expanded={planExpanded}
+          onToggle={() => setPlanExpanded((v) => !v)}
+        />
+      )}
+
+      <div className={`composer ${busy || transcribing ? 'working' : ''}`}>
         <textarea
           value={input}
           placeholder={
@@ -769,12 +1025,113 @@ export function App(): JSX.Element {
         )}
       </div>
 
-      {pantryOpen && (
-        <Pantry onClose={() => setPantryOpen(false)} onChanged={refreshTools} />
+      <footer className="statusbar">
+        {context !== null && (
+          <div className="context-control statusbar-item">
+            <button
+              className="context-size"
+              onClick={() => togglePanel('context')}
+              title={
+                `Model context window: ${context.contextSize.toLocaleString()} tokens` +
+                (context.maxContextWindow
+                  ? ` (max ${context.maxContextWindow.toLocaleString()})`
+                  : '') +
+                '\nClick to change'
+              }
+            >
+              {context.contextSize.toLocaleString()} ctx ▴
+            </button>
+            {activePanel === 'context' && (
+              <ContextEditor
+                info={context}
+                busy={contextBusy}
+                error={contextError}
+                onApply={applyContextSize}
+                onClose={closePanel}
+              />
+            )}
+          </div>
+        )}
+        {breakdown !== null && (
+          <div className="context-control statusbar-item">
+            <ContextUsageBadge
+              breakdown={breakdown}
+              open={activePanel === 'usage'}
+              onToggle={() => togglePanel('usage')}
+            />
+            {activePanel === 'usage' && (
+              <ContextUsage
+                breakdown={breakdown}
+                compacting={compacting}
+                canCompact={history.length > 0 && !busy}
+                onCompact={() => void compactNow()}
+              />
+            )}
+          </div>
+        )}
+        <div className="statusbar-right">
+          <div className="context-control statusbar-item server-connection">
+            <button
+              className={`server-status ${serverStatus}`}
+              onClick={() => togglePanel('connection')}
+              title={
+                (serverStatus === 'online'
+                  ? 'Lemonade server is running'
+                  : serverStatus === 'offline'
+                    ? 'Lemonade server is unreachable — start lemond to chat'
+                    : 'Checking Lemonade server…') + '\nClick to configure the connection'
+              }
+            >
+              <span className="server-dot" />
+              {serverStatus === 'online'
+                ? 'Server online'
+                : serverStatus === 'offline'
+                  ? 'Server offline'
+                  : 'Checking…'}
+            </button>
+            {activePanel === 'connection' && (
+              <ConnectionEditor
+                busy={connectionBusy}
+                error={connectionError}
+                onApply={applyConnection}
+                onClose={closePanel}
+              />
+            )}
+          </div>
+          <button
+            className="statusbar-btn"
+            onClick={() => setActivePanel('models')}
+            title="Choose the model the agent runs on"
+          >
+            <CpuChipIcon /> Models
+          </button>
+          <button
+            className={`speak-toggle ${speaking ? 'stop-speaking' : speak ? 'on' : ''}`}
+            onClick={() => (speaking ? stopSpeaking() : void toggleSpeak())}
+            title={speaking ? 'Stop speaking' : speak ? 'Spoken replies on' : 'Spoken replies off'}
+            aria-label={speaking ? 'Stop speaking' : speak ? 'Spoken replies on' : 'Spoken replies off'}
+          >
+            {speaking ? <StopSpeakingIcon /> : speak ? <SpeakerWaveIcon /> : <SpeakerXMarkIcon />}
+          </button>
+        </div>
+      </footer>
+
+      {activePanel === 'pantry' && (
+        <Pantry onClose={closePanel} onChanged={refreshTools} />
       )}
-      {modelsOpen && (
+      {activePanel === 'history' && (
+        <History
+          sessions={sessions}
+          activeId={sessionId}
+          onOpen={openSession}
+          onDelete={removeSession}
+          onClear={clearHistory}
+          onClose={closePanel}
+        />
+      )}
+      {activePanel === 'models' && (
         <Models
-          onClose={() => setModelsOpen(false)}
+          onClose={closePanel}
           onChanged={refreshContext}
         />
       )}
@@ -867,6 +1224,147 @@ function ConnectionEditor({
   )
 }
 
+// Compact readable token count: 1234 -> 1.2K, 1_500_000 -> 1.5M.
+function formatTokens(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
+  if (n >= 1000) return `${(n / 1000).toFixed(1)}K`
+  return String(n)
+}
+
+// The always-visible context-usage pill: a percent plus a thin fill bar that
+// turns amber then red as the window fills. Clicking opens the breakdown.
+function ContextUsageBadge({
+  breakdown,
+  open,
+  onToggle
+}: {
+  breakdown: ContextBreakdown
+  open: boolean
+  onToggle: () => void
+}): JSX.Element {
+  const pct = breakdown.contextSize > 0
+    ? Math.min(100, Math.round((breakdown.usedTokens / breakdown.contextSize) * 100))
+    : 0
+  const level = pct >= 90 ? 'crit' : pct >= 70 ? 'warn' : 'ok'
+  return (
+    <button
+      className={`context-usage-badge ${level} ${open ? 'open' : ''}`}
+      onClick={onToggle}
+      title={
+        `Context used: ${breakdown.usedTokens.toLocaleString()} of ` +
+        `${breakdown.contextSize.toLocaleString()} tokens (${pct}%)\nClick for a breakdown`
+      }
+    >
+      <span className="context-usage-bar" aria-hidden="true">
+        <span className="context-usage-fill" style={{ width: `${pct}%` }} />
+      </span>
+      {pct}%
+    </button>
+  )
+}
+
+// The breakdown popover, modeled on the reference indicator: a header total, a
+// segmented bar, per-category rows grouped into System / User Context /
+// Uncategorized, and a manual "Compact Conversation" action.
+function ContextUsage({
+  breakdown,
+  compacting,
+  canCompact,
+  onCompact
+}: {
+  breakdown: ContextBreakdown
+  compacting: boolean
+  canCompact: boolean
+  onCompact: () => void
+}): JSX.Element {
+  const { contextSize, usedTokens, categories } = breakdown
+  // Guard against a missing/NaN reserve (e.g. an out-of-date backend that omits
+  // the field) so it can never poison the gradient string or render as "NaN".
+  const reserve = Number.isFinite(breakdown.reserve) ? breakdown.reserve : 0
+  const pct = (n: number): number =>
+    contextSize > 0 && Number.isFinite(n) ? Math.round((n / contextSize) * 1000) / 10 : 0
+  const usedPct = contextSize > 0 ? Math.min(100, Math.round((usedTokens / contextSize) * 100)) : 0
+
+  // Legend rows in draw order; the donut ring is built from the same list so
+  // colours and proportions stay in sync.
+  const items = [
+    { key: 'system', label: 'System', color: 'var(--c-system)', tokens: categories.systemInstructions },
+    { key: 'tools', label: 'Tools', color: 'var(--c-tools)', tokens: categories.toolDefinitions },
+    { key: 'messages', label: 'Messages', color: 'var(--c-messages)', tokens: categories.messages },
+    { key: 'results', label: 'Results', color: 'var(--c-results)', tokens: categories.toolResults },
+    { key: 'other', label: 'Other', color: 'var(--c-other)', tokens: categories.other }
+  ]
+
+  // Build the conic-gradient ring: each category takes its share of the whole
+  // window, followed by the hatched reserve slice, then the empty remainder.
+  // `frac` guards non-finite inputs so a single bad value can't produce a
+  // `NaN%` stop that would invalidate the whole gradient (and hide the ring).
+  const frac = (n: number): number =>
+    contextSize > 0 && Number.isFinite(n) ? Math.max(0, n / contextSize) : 0
+  let acc = 0
+  const stops: string[] = []
+  for (const it of items) {
+    const start = acc * 100
+    acc += frac(it.tokens)
+    stops.push(`${it.color} ${start}% ${acc * 100}%`)
+  }
+  const reserveStart = acc * 100
+  acc += frac(reserve)
+  const reserveEnd = acc * 100
+  const ring =
+    `conic-gradient(${stops.join(', ')}, ` +
+    `var(--c-reserve) ${reserveStart}% ${reserveEnd}%, ` +
+    `var(--border) ${reserveEnd}% 100%)`
+
+  return (
+    <div className="context-usage-pop usage-a" onClick={(e) => e.stopPropagation()}>
+      <div className="usage-a-top">
+        <div className="usage-donut" style={{ background: ring }}>
+          <div className="usage-donut-hole">
+            <b>{usedPct}%</b>
+            <small>used</small>
+          </div>
+        </div>
+        <div className="usage-a-meta">
+          <div className="usage-a-big">
+            {formatTokens(usedTokens)} / {formatTokens(contextSize)}
+          </div>
+          <div className="usage-a-sub">tokens in context</div>
+          <div className="usage-a-sub">~{formatTokens(reserve)} reserved for reply</div>
+        </div>
+      </div>
+
+      <div className="usage-a-legend">
+        {items.map((it) => (
+          <div className="usage-a-li" key={it.key}>
+            <span className="usage-dot" style={{ background: it.color }} aria-hidden="true" />
+            {it.label}
+            <span className="usage-a-v">{pct(it.tokens)}%</span>
+          </div>
+        ))}
+        <div className="usage-a-li">
+          <span className="usage-dot seg-reserve" aria-hidden="true" />
+          Reserved
+          <span className="usage-a-v">{pct(reserve)}%</span>
+        </div>
+      </div>
+
+      <button
+        className="usage-compact"
+        onClick={onCompact}
+        disabled={!canCompact || compacting}
+        title={
+          canCompact
+            ? 'Summarize older messages to reclaim context'
+            : 'Nothing to compact yet'
+        }
+      >
+        {compacting ? 'Compacting…' : 'Compact Conversation'}
+      </button>
+    </div>
+  )
+}
+
 function ContextEditor({
   info,
   busy,
@@ -936,6 +1434,118 @@ function ContextEditor({
         <p className="context-editor-err">Enter a value between 512 and {max.toLocaleString()}.</p>
       )}
       {error && <p className="context-editor-err">{error}</p>}
+    </div>
+  )
+}
+
+// The conversation-history slide-over (left side): lists saved conversations
+// newest-first and lets the user reopen one to continue it, or delete it. The
+// currently open conversation is marked so it's clear what's live.
+function History({
+  sessions,
+  activeId,
+  onOpen,
+  onDelete,
+  onClear,
+  onClose
+}: {
+  sessions: SessionSummary[]
+  activeId: string
+  onOpen: (id: string) => void
+  onDelete: (id: string) => void
+  onClear: () => void
+  onClose: () => void
+}): JSX.Element {
+  const [query, setQuery] = useState('')
+  // Set once the user clicks "Clear all", so the button turns into a confirm.
+  const [confirmClear, setConfirmClear] = useState(false)
+
+  const q = query.trim().toLowerCase()
+  const filtered = q
+    ? sessions.filter((s) => (s.title || '').toLowerCase().includes(q))
+    : sessions
+
+  return (
+    <div className="pantry-overlay history-overlay" onClick={onClose}>
+      <aside className="pantry history-panel" onClick={(e) => e.stopPropagation()}>
+        <header className="pantry-head">
+          <div>
+            <h2>
+              <ClockIcon /> History
+            </h2>
+            <p className="pantry-sub">Reopen a past conversation to pick up where you left off</p>
+          </div>
+          <button className="pantry-close" onClick={onClose} aria-label="Close" title="Close">
+            ✕
+          </button>
+        </header>
+        <div className="history-search">
+          <input
+            type="text"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search conversations…"
+            aria-label="Search conversations"
+          />
+          {sessions.length > 0 &&
+            (confirmClear ? (
+              <div className="history-confirm">
+                <span>Delete all?</span>
+                <button
+                  className="history-confirm-yes"
+                  onClick={() => {
+                    onClear()
+                    setConfirmClear(false)
+                  }}
+                >
+                  Yes, clear all
+                </button>
+                <button className="history-confirm-no" onClick={() => setConfirmClear(false)}>
+                  Cancel
+                </button>
+              </div>
+            ) : (
+              <button
+                className="history-clear"
+                onClick={() => setConfirmClear(true)}
+                title="Delete every saved conversation"
+              >
+                <TrashIcon /> Clear all
+              </button>
+            ))}
+        </div>
+        <div className="history-list">
+          {sessions.length === 0 && (
+            <div className="empty">No saved conversations yet. They'll appear here once you chat.</div>
+          )}
+          {sessions.length > 0 && filtered.length === 0 && (
+            <div className="empty">No conversations match "{query}".</div>
+          )}
+          {filtered.map((s) => (
+            <div
+              key={s.id}
+              className={`history-item ${s.id === activeId ? 'active' : ''}`}
+            >
+              <button className="history-open" onClick={() => onOpen(s.id)} title="Open this conversation">
+                <span className="history-title">{s.title || 'Untitled conversation'}</span>
+                <span className="history-meta">
+                  {new Date(s.updatedAt).toLocaleString()} · {s.messageCount} message
+                  {s.messageCount === 1 ? '' : 's'}
+                  {s.id === activeId ? ' · current' : ''}
+                </span>
+              </button>
+              <button
+                className="history-del"
+                onClick={() => onDelete(s.id)}
+                aria-label="Delete conversation"
+                title="Delete conversation"
+              >
+                <TrashIcon />
+              </button>
+            </div>
+          ))}
+        </div>
+      </aside>
     </div>
   )
 }
@@ -1103,12 +1713,102 @@ function ModelCard({
   )
 }
 
+// The sticky plan bar shown above the composer while the agent has an active
+// plan. Collapsed, it summarizes the current step and overall progress (e.g.
+// "Creating README.md… (2/4)"); expanded, it reveals the full checklist. Driven
+// by the update_plan tool's plan_updated events.
+function PlanBar({
+  steps,
+  expanded,
+  onToggle
+}: {
+  steps: PlanStep[]
+  expanded: boolean
+  onToggle: () => void
+}): JSX.Element {
+  const total = steps.length
+  const done = steps.filter((s) => s.status === 'completed').length
+  const allDone = done === total
+
+  // The step to summarize when collapsed: the one in progress, else the first
+  // not-yet-done step, else the last (everything complete).
+  const activeIdx = (() => {
+    const ip = steps.findIndex((s) => s.status === 'in-progress')
+    if (ip !== -1) return ip
+    const pending = steps.findIndex((s) => s.status !== 'completed')
+    return pending !== -1 ? pending : total - 1
+  })()
+  const active = steps[activeIdx]
+  const inProgress = active?.status === 'in-progress'
+
+  const summary = allDone
+    ? 'Plan complete'
+    : `${active?.title ?? 'Working'}${inProgress ? '…' : ''}`
+  // Position shown as (current/total): the active step's place in the list, or
+  // total/total once everything is finished.
+  const position = allDone ? total : activeIdx + 1
+  const fillPct = total > 0 ? Math.round((done / total) * 100) : 0
+
+  return (
+    <div className={`plan-bar ${expanded ? 'open' : ''} ${allDone ? 'complete' : ''}`}>
+      <button
+        className="plan-bar-head"
+        onClick={onToggle}
+        aria-expanded={expanded}
+        title={expanded ? 'Collapse plan' : 'Expand plan'}
+      >
+        <span className="plan-bar-caret" aria-hidden="true">
+          ▸
+        </span>
+        <span className="plan-bar-summary">{summary}</span>
+        <span className="plan-bar-count">
+          ({position}/{total})
+        </span>
+        <span className="plan-bar-progress" aria-hidden="true">
+          <span className="plan-bar-fill" style={{ width: `${fillPct}%` }} />
+        </span>
+      </button>
+      {expanded && (
+        <ul className="plan-list plan-bar-list">
+          {steps.map((step, i) => (
+            <li key={i} className={`plan-step ${step.status}`}>
+              <span className="plan-mark" aria-hidden="true" />
+              <span className="plan-step-text">{step.title}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  )
+}
+
 function Line({ entry }: { entry: Entry }): JSX.Element {
   if (entry.kind === 'tool') {
     return (
       <div className={`line tool ${entry.ok === false ? 'tool-err' : ''}`}>
         <span className="tool-label">{entry.label}</span>
         <span className="tool-detail">{entry.detail}</span>
+      </div>
+    )
+  }
+  if (entry.kind === 'plan') {
+    const done = entry.steps.filter((s) => s.status === 'completed').length
+    return (
+      <div className="line plan">
+        <div className="plan-head">
+          <span className="plan-title">Plan</span>
+          <span className="plan-count">
+            {done}/{entry.steps.length}
+          </span>
+        </div>
+        <ul className="plan-list">
+          {entry.steps.map((step, i) => (
+            <li key={i} className={`plan-step ${step.status}`}>
+              <span className="plan-mark" aria-hidden="true" />
+              <span className="plan-step-text">{step.title}</span>
+            </li>
+          ))}
+        </ul>
       </div>
     )
   }

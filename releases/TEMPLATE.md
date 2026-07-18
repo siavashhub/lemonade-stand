@@ -1,4 +1,4 @@
-# v{VERSION} — {TITLE}
+# v{VERSION}
 
 _Release date: {YYYY-MM-DD}_
 

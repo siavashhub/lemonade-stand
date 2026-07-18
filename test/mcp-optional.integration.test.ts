@@ -132,6 +132,10 @@ d('fetch MCP server (integration, uvx, network)', () => {
   it('fetches a URL and returns page content as markdown', async () => {
     expect(manager.getTools().map((t) => t.qualifiedName)).toContain('fetch__fetch')
     const result = await manager.callTool('fetch__fetch', { url: 'https://example.com' })
-    expect(result.toLowerCase()).toContain('example domain')
+    // The server prefixes the response with the URL, so example.com is always
+    // present. iana.org is the stable IANA link in the page body, regardless of
+    // how mcp-server-fetch renders the page heading.
+    expect(result.toLowerCase()).toContain('example.com')
+    expect(result.toLowerCase()).toContain('iana.org')
   })
 })

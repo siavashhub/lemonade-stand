@@ -2,7 +2,7 @@
 
 Lemonade Stand is a desktop agent that runs a local model (served by `lemond`)
 and lets it call **tools** provided by **MCP servers**. You stock those tools
-from the **Pantry** (the Market), then just talk to the agent in plain English —
+from the **Pantry** (the Market), then just talk to the agent in plain English and
 it decides when to reach for a tool. Before any tool runs, you'll see an
 **approval card** (Allow once / Always allow / Deny) unless you've turned
 approvals off.

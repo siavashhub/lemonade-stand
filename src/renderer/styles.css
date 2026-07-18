@@ -22,6 +22,13 @@
   --warn-border: #6b5600;
   --ok: #35d0a0;
   --send-bg: radial-gradient(circle at 30% 30%, #2e4a44, #172a26);
+  /* Context-usage indicator category palette. */
+  --c-system: #6ea8fe;
+  --c-tools: #7b8cff;
+  --c-messages: #4fd1a5;
+  --c-results: #d9a441;
+  --c-other: #9aa0aa;
+  --c-reserve: #4a6a8a;
 }
 
 :root[data-theme='light'] {
@@ -45,6 +52,13 @@
   --warn-border: #e6cf7a;
   --ok: #22b07d;
   --send-bg: radial-gradient(circle at 30% 30%, #fffbe2, #f6eec0);
+  /* Context-usage indicator category palette (tuned for the light theme). */
+  --c-system: #3b82c4;
+  --c-tools: #6a6fd8;
+  --c-messages: #2fa07a;
+  --c-results: #c98a2a;
+  --c-other: #8b8f98;
+  --c-reserve: #6a8fb0;
 }
 
 * {
@@ -63,6 +77,25 @@ body {
   color: var(--text);
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   font-size: 14px;
+}
+
+/* Custom scrollbar — replaces the default Windows chrome. */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--muted);
+}
+::-webkit-scrollbar-corner {
+  background: transparent;
 }
 
 .app {
@@ -95,9 +128,10 @@ body {
   align-items: center;
   gap: 8px;
   font-weight: 600;
-  /* Opt out of the drag region so the native title tooltip (app version)
-     fires on hover. */
-  -webkit-app-region: no-drag;
+  /* Give the two side sections equal weight so the center group stays truly
+     centered regardless of how wide each side is. */
+  flex: 1 1 0;
+  min-width: 0;
 }
 
 .brand-logo {
@@ -107,10 +141,74 @@ body {
   display: block;
 }
 
+/* The center cluster holds the primary session actions (New Session, History)
+   pinned to the middle of the top bar. */
+.topbar-center {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 0 0 auto;
+}
+
+/* Segmented control: New Session + History fused into one rounded pill so the
+   two related session actions read as a single unit. New Session is the primary
+   (amber-tinted) half; History is the secondary neighbour. */
+.session-seg {
+  display: inline-flex;
+  align-items: stretch;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  overflow: hidden;
+  background: var(--bg);
+  -webkit-app-region: no-drag;
+}
+
+.session-seg-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  padding: 7px 16px;
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.session-seg-btn svg {
+  font-size: 15px;
+}
+
+.session-seg-btn + .session-seg-btn {
+  border-left: 1px solid var(--border);
+}
+
+.session-seg-btn:hover:not(:disabled) {
+  background: rgba(127, 127, 127, 0.12);
+}
+
+.session-seg-btn.primary {
+  color: var(--accent);
+}
+
+.session-seg-btn.primary:hover:not(:disabled) {
+  background: rgba(245, 197, 66, 0.12);
+}
+
+.session-seg-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 .topbar-right {
   display: flex;
   align-items: center;
   gap: 12px;
+  flex: 1 1 0;
+  justify-content: flex-end;
 }
 
 .window-controls {
@@ -151,40 +249,6 @@ body {
   font-size: 12px;
   color: var(--muted);
   user-select: none;
-}
-
-button.server-status {
-  background: transparent;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 3px 8px;
-  cursor: pointer;
-}
-
-button.server-status:hover {
-  color: var(--text);
-  border-color: var(--accent);
-}
-
-.conn-label {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  font-size: 11px;
-  color: var(--muted);
-}
-
-.conn-label input {
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  color: var(--text);
-  padding: 5px 8px;
-  font-size: 13px;
-}
-
-.conn-optional {
-  opacity: 0.7;
 }
 
 .server-dot {
@@ -231,6 +295,187 @@ button.server-status:hover {
 .context-control .context-size:hover {
   color: var(--text);
   border-color: var(--accent);
+}
+
+/* --- Context-usage indicator: top-bar pill + Option A donut popover ------- */
+.context-usage-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 2px 8px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.context-usage-badge:hover,
+.context-usage-badge.open {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.context-usage-bar {
+  width: 38px;
+  height: 5px;
+  border-radius: 3px;
+  background: var(--border);
+  overflow: hidden;
+}
+
+.context-usage-fill {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.25s ease;
+}
+
+.context-usage-badge.warn .context-usage-fill {
+  background: #d9a441;
+}
+
+.context-usage-badge.crit .context-usage-fill {
+  background: #e05a5a;
+}
+
+.context-usage-pop {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 20;
+  width: 264px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 14px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+}
+
+.usage-a-top {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 14px;
+}
+
+.usage-donut {
+  width: 92px;
+  height: 92px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  /* The conic-gradient ring is applied inline, per render. Its "unused" arc
+     uses var(--border); override it locally to a lighter tone so the ring track
+     reads clearly against the panel instead of blending in. */
+  --border: #3a5560;
+}
+
+/* Light theme: use a soft neutral track instead of the dark teal. */
+:root[data-theme='light'] .usage-donut {
+  --border: #d8d2a8;
+}
+
+.usage-donut-hole {
+  width: 70%;
+  height: 70%;
+  border-radius: 50%;
+  background: var(--panel);
+  display: grid;
+  place-items: center;
+  position: relative;
+}
+
+.usage-donut-hole b {
+  font-size: 20px;
+  line-height: 1;
+  color: var(--text);
+}
+
+.usage-donut-hole small {
+  position: absolute;
+  bottom: 16px;
+  font-size: 9px;
+  color: var(--muted);
+}
+
+.usage-a-meta {
+  min-width: 0;
+}
+
+.usage-a-big {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.usage-a-sub {
+  color: var(--muted);
+  font-size: 12px;
+  margin-top: 2px;
+}
+
+.usage-a-legend {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px 14px;
+  margin: 2px 0 4px;
+}
+
+.usage-a-li {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  color: var(--text);
+}
+
+.usage-a-v {
+  margin-left: auto;
+  color: var(--muted);
+}
+
+.usage-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  flex: 0 0 auto;
+  display: inline-block;
+}
+
+.seg-reserve {
+  background: repeating-linear-gradient(
+    45deg,
+    var(--c-reserve),
+    var(--c-reserve) 3px,
+    transparent 3px,
+    transparent 6px
+  );
+}
+
+.usage-compact {
+  margin-top: 12px;
+  width: 100%;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.usage-compact:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.usage-compact:disabled {
+  opacity: 0.55;
+  cursor: default;
 }
 
 .context-editor {
@@ -369,6 +614,22 @@ button.server-status:hover {
   color: var(--accent);
 }
 
+.speak-toggle.stop-speaking {
+  border-color: var(--danger, #d9534f);
+  color: var(--danger, #d9534f);
+  animation: speak-stop-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes speak-stop-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
 .pantry-toggle {
   display: inline-flex;
   align-items: center;
@@ -392,9 +653,102 @@ button.server-status:hover {
   border-color: var(--accent);
 }
 
-.tools-count {
+/* The Pantry button doubles as the connected-tools indicator: a compact count
+   badge tucked into the corner, replacing the old free-standing "N tools
+   connected" text so the top bar stays tidy. */
+.pantry-toggle-primary {
+  position: relative;
+}
+
+.tools-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  margin-left: 1px;
+  border-radius: 9px;
+  background: var(--accent);
+  color: var(--on-accent);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+/* --- Footer status bar: houses lower-traffic controls (context window size,
+   context usage, model picker) that used to crowd the top bar. --------------- */
+.statusbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 14px;
+  border-top: 1px solid var(--border);
+  background: var(--panel);
+  min-height: 30px;
+}
+
+.statusbar-item {
+  position: relative;
+  display: inline-flex;
+}
+
+/* Lower-traffic status/config controls (server connection, model picker, voice
+   toggle), grouped and pushed to the right edge of the footer. */
+.statusbar-right {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  margin-left: auto;
+}
+
+.statusbar-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid var(--border);
+  background: transparent;
   color: var(--muted);
-  font-size: 12px;
+  border-radius: 6px;
+  padding: 3px 9px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+.statusbar-btn svg {
+  font-size: 14px;
+}
+
+.statusbar-btn:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+/* The footer speaker toggle is smaller than the top-bar variant to sit neatly
+   inline with the text-sized status controls around it. */
+.statusbar-right .speak-toggle {
+  font-size: 14px;
+  padding: 3px 7px;
+}
+
+/* Popovers hosted in the footer must open upward so they never spill past the
+   bottom edge. Left-hand items (context, usage) expand rightward. */
+.statusbar .context-editor,
+.statusbar .context-usage-pop {
+  top: auto;
+  bottom: calc(100% + 8px);
+  right: auto;
+  left: 0;
+}
+
+/* The server-status pill now lives in the footer's right-aligned cluster, so
+   its connection popover opens upward AND leftward (anchored to the button's
+   right edge) to stay clear of the window's right edge. */
+.statusbar-right .server-connection .context-editor {
+  right: 0;
+  left: auto;
 }
 
 .transcript {
@@ -500,6 +854,181 @@ button.server-status:hover {
   padding: 8px 12px;
   border-radius: 8px;
   font-size: 13px;
+}
+
+/* Live task plan/todo checklist emitted by the agent's update_plan tool. Shown
+   inline and updated in place as the model works through the steps. */
+.line.plan {
+  align-self: flex-start;
+  max-width: 100%;
+  gap: 8px;
+  background: var(--accent-soft);
+  border: 1px solid var(--border);
+  border-left: 2px solid var(--accent);
+  padding: 10px 12px;
+  border-radius: 8px;
+}
+
+.plan-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.plan-title {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+.plan-count {
+  font-size: 12px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.plan-list {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.plan-step {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text);
+}
+
+.plan-mark {
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  margin-top: 2px;
+  border-radius: 50%;
+  border: 2px solid var(--muted);
+  box-sizing: border-box;
+  position: relative;
+}
+
+.plan-step.in-progress .plan-mark {
+  border-color: var(--accent);
+  background: radial-gradient(circle at center, var(--accent) 0 3px, transparent 3px);
+}
+
+.plan-step.completed .plan-mark {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.plan-step.completed .plan-mark::after {
+  content: '';
+  position: absolute;
+  left: 3px;
+  top: 0px;
+  width: 3px;
+  height: 7px;
+  border: solid var(--bg);
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+
+.plan-step.completed .plan-step-text {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+
+.plan-step.pending .plan-step-text {
+  color: var(--muted);
+}
+
+/* Sticky plan bar, docked just above the composer. Collapsed it shows the
+   current step + progress; clicking expands it into the full checklist. */
+.plan-bar {
+  flex: 0 0 auto;
+  margin: 0 12px;
+  background: var(--accent-soft);
+  border: 1px solid var(--border);
+  border-left: 2px solid var(--accent);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.plan-bar-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 12px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  color: var(--text);
+  font-size: 13px;
+}
+
+.plan-bar-head:hover {
+  background: var(--accent-soft);
+}
+
+.plan-bar-caret {
+  flex: 0 0 auto;
+  color: var(--accent);
+  font-size: 11px;
+  transition: transform 0.15s ease;
+}
+
+.plan-bar.open .plan-bar-caret {
+  transform: rotate(90deg);
+}
+
+.plan-bar-summary {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+
+.plan-bar.complete .plan-bar-summary {
+  color: var(--accent);
+}
+
+.plan-bar-count {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+}
+
+.plan-bar-progress {
+  flex: 0 0 64px;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--border);
+  overflow: hidden;
+}
+
+.plan-bar-fill {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  border-radius: 999px;
+  transition: width 0.25s ease;
+}
+
+.plan-bar-list {
+  margin: 0;
+  padding: 4px 12px 12px;
+  border-top: 1px solid var(--border);
 }
 
 /* "Agent is working" indicator shown while a turn is in flight. Cycles the
@@ -633,9 +1162,49 @@ button.server-status:hover {
 .composer {
   display: flex;
   gap: 8px;
-  padding: 12px 16px;
-  border-top: 1px solid var(--border);
+  align-items: center;
+  padding: 12px;
+  margin: 0 12px 16px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
   background: var(--panel);
+  box-shadow: 0 6px 24px -12px rgba(0, 0, 0, 0.45);
+}
+
+/* While the agent is working (or audio is transcribing) a thin accent beam
+   sweeps across the top edge of the composer. Subtle and never shifts layout. */
+.composer.working {
+  position: relative;
+}
+
+.composer.working::before {
+  content: '';
+  position: absolute;
+  top: -1px;
+  left: -1px;
+  right: -1px;
+  height: 3px;
+  border-radius: 16px 16px 0 0;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    var(--accent) 40%,
+    var(--accent) 60%,
+    transparent
+  );
+  background-size: 40% 100%;
+  background-repeat: no-repeat;
+  animation: composer-sweep 1.4s ease-in-out infinite;
+  pointer-events: none;
+}
+
+@keyframes composer-sweep {
+  0% {
+    background-position: -40% 0;
+  }
+  100% {
+    background-position: 140% 0;
+  }
 }
 
 .composer textarea {
@@ -695,34 +1264,42 @@ button.server-status:hover {
 }
 
 /* While the agent is working (or audio is being transcribed) the send lemon
-   becomes a stop button so the user can halt and start a fresh request. Red to
-   read unmistakably as "stop", with a soft pulse echoing the mic's live state. */
+   becomes a stop button so the user can halt and start a fresh request. A
+   spinning accent arc rings the button to signal "working", while the stop
+   glyph stays at full strength so it clearly reads as enabled and clickable. */
 .composer button.send-btn.stop-btn {
-  background: #e05a5a;
-  border-color: #e05a5a;
-  color: #fff;
+  position: relative;
+  background: var(--send-bg);
+  border-color: var(--border);
+  color: var(--accent);
   font-size: 18px;
-  box-shadow: 0 3px 0 #a83b3b, 0 0 12px rgba(224, 90, 90, 0.5);
-  animation: stop-pulse 1.4s ease-in-out infinite;
+  box-shadow: 0 3px 0 var(--accent-deep), 0 0 12px var(--accent-glow);
+}
+
+.composer button.send-btn.stop-btn::after {
+  content: '';
+  position: absolute;
+  inset: -2px;
+  border-radius: 999px;
+  border: 2px solid transparent;
+  /* border-top-color: var(--accent);
+  border-right-color: var(--accent);
+  animation: stop-spin 0.8s linear infinite; */
 }
 
 .composer button.send-btn.stop-btn:not(:disabled):hover {
   filter: brightness(1.08);
-  box-shadow: 0 3px 0 #a83b3b, 0 0 18px rgba(224, 90, 90, 0.6);
+  box-shadow: 0 3px 0 var(--accent-deep), 0 0 18px var(--accent-glow);
 }
 
 .composer button.send-btn.stop-btn:not(:disabled):active {
   transform: translateY(3px);
-  box-shadow: 0 0 0 #a83b3b, 0 0 12px rgba(224, 90, 90, 0.5);
+  box-shadow: 0 0 0 var(--accent-deep), 0 0 12px var(--accent-glow);
 }
 
-@keyframes stop-pulse {
-  0%,
-  100% {
-    box-shadow: 0 3px 0 #a83b3b, 0 0 0 0 rgba(224, 90, 90, 0.5);
-  }
-  50% {
-    box-shadow: 0 3px 0 #a83b3b, 0 0 0 6px rgba(224, 90, 90, 0);
+@keyframes stop-spin {
+  to {
+    transform: rotate(360deg);
   }
 }
 
@@ -771,8 +1348,8 @@ button.server-status:hover {
    lemon. Circular to match the send button, but understated until active. */
 .composer button.mic-btn {
   flex: 0 0 auto;
-  width: 44px;
-  height: 44px;
+  width: 33px;
+  height: 33px;
   padding: 0;
   border-radius: 999px;
   background: var(--bg);
@@ -782,6 +1359,7 @@ button.server-status:hover {
   display: flex;
   align-items: center;
   justify-content: center;
+  align-self: center;
   transition: transform 0.1s ease, background 0.2s ease, color 0.2s ease,
     border-color 0.2s ease, box-shadow 0.2s ease;
 }
@@ -1177,4 +1755,209 @@ button.server-status:hover {
   border-top: 1px solid var(--border);
   color: var(--muted);
   font-size: 11px;
+}
+
+/* --- Restored: server-status pill + connection editor fields ------------- */
+button.server-status {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 3px 8px;
+  cursor: pointer;
+}
+
+button.server-status:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.conn-label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.conn-label input {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  padding: 5px 8px;
+  font-size: 13px;
+}
+
+.conn-optional {
+  opacity: 0.7;
+}
+
+/* --- Restored: conversation history sidebar ------------------------------ */
+.history-overlay {
+  justify-content: flex-start;
+}
+
+.history-panel {
+  border-left: none;
+  border-right: 1px solid var(--border);
+  box-shadow: 12px 0 40px rgba(0, 0, 0, 0.4);
+  animation: history-in 0.18s ease-out;
+}
+
+@keyframes history-in {
+  from {
+    transform: translateX(-24px);
+    opacity: 0.4;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+.history-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 10px 12px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.history-search {
+  padding: 12px 12px 8px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.history-search input {
+  width: 100%;
+  box-sizing: border-box;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 13px;
+}
+
+.history-search input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.history-clear {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--muted);
+  border-radius: 6px;
+  padding: 4px 10px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.history-clear:hover {
+  border-color: #e05a5a;
+  color: #e05a5a;
+}
+
+.history-confirm {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.history-confirm-yes,
+.history-confirm-no {
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 4px 10px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.history-confirm-yes {
+  border-color: #e05a5a;
+  color: #e05a5a;
+}
+
+.history-confirm-yes:hover {
+  background: #e05a5a;
+  color: #fff;
+}
+
+.history-confirm-no:hover {
+  border-color: var(--accent);
+}
+
+.history-item {
+  display: flex;
+  align-items: stretch;
+  gap: 6px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  overflow: hidden;
+}
+
+.history-item.active {
+  border-color: var(--accent);
+}
+
+.history-open {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  align-items: flex-start;
+  text-align: left;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  padding: 9px 11px;
+  cursor: pointer;
+}
+
+.history-open:hover {
+  background: var(--panel);
+}
+
+.history-title {
+  font-weight: 600;
+  font-size: 13px;
+  line-height: 1.3;
+}
+
+.history-meta {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.history-del {
+  border: none;
+  border-left: 1px solid var(--border);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 0 11px;
+  font-size: 15px;
+  display: flex;
+  align-items: center;
+}
+
+.history-del:hover {
+  color: #e05a5a;
+  background: var(--panel);
 }

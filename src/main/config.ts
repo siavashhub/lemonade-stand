@@ -22,6 +22,13 @@ function loadDotEnv(cwd: string): void {
   }
 }
 
+// Clamp a possibly-bad numeric env value into the 0..1 range, falling back to a
+// default when it isn't a finite number.
+function clampFraction(value: number, fallback: number): number {
+  if (!Number.isFinite(value)) return fallback
+  return Math.min(1, Math.max(0, value))
+}
+
 export interface AppConfig {
   lemonadeBaseUrl: string
   lemonadeApiKey: string
@@ -40,6 +47,9 @@ export interface AppConfig {
   systemPrompt: string
   /** Prompt the user before every MCP tool call (default true). */
   requireApproval: boolean
+  /** Fraction (0-1) of the usable context budget at which older messages are
+   * auto-summarized to reclaim room. 0 disables auto-compaction. */
+  compactThreshold: number
   tts: {
     enabled: boolean
     model: string
@@ -89,8 +99,12 @@ export function loadConfig(cwd: string = process.cwd()): AppConfig {
     completionReserve: Number(process.env.LEMONADE_COMPLETION_RESERVE ?? '512'),
     systemPrompt: process.env.AGENT_SYSTEM_PROMPT ?? DEFAULT_SYSTEM_PROMPT,
     requireApproval: (process.env.AGENT_REQUIRE_APPROVAL ?? 'true') !== 'false',
+    compactThreshold: clampFraction(
+      Number(process.env.AGENT_COMPACT_THRESHOLD ?? '0.9'),
+      0.9
+    ),
     tts: {
-      enabled: (process.env.LEMONADE_TTS_ENABLED ?? 'false') === 'true',
+      enabled: saved.speak ?? (process.env.LEMONADE_TTS_ENABLED ?? 'false') === 'true',
       model: process.env.LEMONADE_TTS_MODEL ?? 'kokoro-v1',
       voice: process.env.LEMONADE_TTS_VOICE ?? 'af_sky',
       format: process.env.LEMONADE_TTS_FORMAT ?? 'mp3'
@@ -111,7 +125,10 @@ const DEFAULT_SYSTEM_PROMPT =
   'query a database, run a command \u2014 you MUST call the appropriate tool to actually do it. ' +
   'Never print code, file contents, or step-by-step instructions for the user to run themselves ' +
   'when a tool can perform the action directly. Only reply in plain text when no tool fits, or to ' +
-  'briefly report results after your tool calls have completed.'
+  'briefly report results after your tool calls have completed. ' +
+  'For a task that takes several steps or tool calls, first call the update_plan tool to lay out ' +
+  'a short todo list, then call it again as you go to mark steps in-progress and completed. ' +
+  'Skip planning for simple, one-step requests.'
 
 const SERVERS_FILE = 'config/servers.json'
 const CATALOG_FILE = 'config/catalog.json'
@@ -127,6 +144,8 @@ export interface AppSettings {
   baseUrl?: string
   /** API key the user configured in-app, if the server requires one. */
   apiKey?: string
+  /** Whether spoken replies (TTS) were last left on or off by the user. */
+  speak?: boolean
 }
 
 /** Read persisted UI/app settings. Missing or malformed file -> empty. */
