@@ -527,6 +527,22 @@ body {
   color: var(--accent);
 }
 
+.speak-toggle.stop-speaking {
+  border-color: var(--danger, #d9534f);
+  color: var(--danger, #d9534f);
+  animation: speak-stop-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes speak-stop-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
 .pantry-toggle {
   display: inline-flex;
   align-items: center;
@@ -550,9 +566,86 @@ body {
   border-color: var(--accent);
 }
 
-.tools-count {
+/* The Pantry button doubles as the connected-tools indicator: a compact count
+   badge tucked into the corner, replacing the old free-standing "N tools
+   connected" text so the top bar stays tidy. */
+.pantry-toggle-primary {
+  position: relative;
+}
+
+.tools-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  margin-left: 1px;
+  border-radius: 9px;
+  background: var(--accent);
+  color: var(--on-accent);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+/* --- Footer status bar: houses lower-traffic controls (context window size,
+   context usage, model picker) that used to crowd the top bar. --------------- */
+.statusbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 14px;
+  border-top: 1px solid var(--border);
+  background: var(--panel);
+  min-height: 30px;
+}
+
+.statusbar-item {
+  position: relative;
+  display: inline-flex;
+}
+
+.statusbar-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: auto;
+  border: 1px solid var(--border);
+  background: transparent;
   color: var(--muted);
-  font-size: 12px;
+  border-radius: 6px;
+  padding: 3px 9px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+.statusbar-btn svg {
+  font-size: 14px;
+}
+
+.statusbar-btn:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+/* Popovers hosted in the footer must open upward and toward the right so they
+   never spill past the bottom or left edges of the window. */
+.statusbar .context-editor,
+.statusbar .context-usage-pop {
+  top: auto;
+  bottom: calc(100% + 8px);
+  right: auto;
+  left: 0;
+}
+
+/* The server-status pill sits on the left of the top-bar cluster, so its
+   connection popover opens rightward to stay inside the window frame. */
+.server-connection .context-editor {
+  right: auto;
+  left: 0;
 }
 
 .transcript {

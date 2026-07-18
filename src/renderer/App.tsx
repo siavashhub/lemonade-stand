@@ -21,6 +21,7 @@ import {
   SpeakerWaveIcon,
   SpeakerXMarkIcon,
   StopIcon,
+  StopSpeakingIcon,
   TrashIcon
 } from './icons'
 
@@ -45,15 +46,27 @@ type ServerStatus = 'checking' | 'online' | 'offline'
 // localStorage and applied via the data-theme attribute on <html>.
 type Theme = 'light' | 'dark'
 
+// The overlays that can be shown one-at-a-time: top-bar/footer popovers
+// (connection, context, usage) and the full modals (pantry, models, history).
+// A single active-panel value enforces that opening one closes any other.
+type Panel = 'connection' | 'context' | 'usage' | 'pantry' | 'models' | 'history'
+
 // Convert base64 audio from lemond's TTS into a playable object URL. Rejects
 // (rather than swallowing) so callers can surface a playback failure instead of
-// leaving the user wondering why it's silent.
-function playAudio(base64: string, format: string): Promise<void> {
+// leaving the user wondering why it's silent. The optional `register` callback
+// receives the live <audio> element before playback starts so callers can keep
+// a handle on it (e.g. to stop spoken replies mid-playback).
+function playAudio(
+  base64: string,
+  format: string,
+  register?: (audio: HTMLAudioElement) => void
+): Promise<void> {
   const mime = format === 'wav' ? 'audio/wav' : format === 'mp3' ? 'audio/mpeg' : `audio/${format}`
   const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0))
   const url = URL.createObjectURL(new Blob([bytes], { type: mime }))
   const audio = new Audio(url)
   audio.onended = () => URL.revokeObjectURL(url)
+  register?.(audio)
   return audio.play().catch((err) => {
     URL.revokeObjectURL(url)
     throw err
@@ -188,24 +201,28 @@ export function App(): JSX.Element {
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
   const [speak, setSpeak] = useState(false)
+  // True while a synthesized reply is actively playing, so the UI can offer a
+  // stop control (spoken replies are otherwise unstoppable once started).
+  const [speaking, setSpeaking] = useState(false)
   const [recording, setRecording] = useState(false)
   const [transcribing, setTranscribing] = useState(false)
   const [approvals, setApprovals] = useState<PendingApproval[]>([])
   const [serverStatus, setServerStatus] = useState<ServerStatus>('checking')
-  const [connectionOpen, setConnectionOpen] = useState(false)
   const [connectionBusy, setConnectionBusy] = useState(false)
   const [connectionError, setConnectionError] = useState<string | null>(null)
   const [context, setContext] = useState<ContextInfo | null>(null)
-  const [contextEditorOpen, setContextEditorOpen] = useState(false)
   const [contextBusy, setContextBusy] = useState(false)
   const [contextError, setContextError] = useState<string | null>(null)
-  // Live per-category context usage for the indicator, plus its popover/compact
-  // state. Refreshed whenever the conversation or model context changes.
+  // Live per-category context usage for the indicator. Refreshed whenever the
+  // conversation or model context changes.
   const [breakdown, setBreakdown] = useState<ContextBreakdown | null>(null)
-  const [usageOpen, setUsageOpen] = useState(false)
   const [compacting, setCompacting] = useState(false)
-  const [pantryOpen, setPantryOpen] = useState(false)
-  const [modelsOpen, setModelsOpen] = useState(false)
+  // Exactly one overlay (popover or modal) can be open at a time. Opening any
+  // panel replaces whatever was showing, so clicking a second control always
+  // dismisses the first — no stacking of windows on top of each other.
+  const [activePanel, setActivePanel] = useState<Panel | null>(null)
+  const togglePanel = (p: Panel): void => setActivePanel((cur) => (cur === p ? null : p))
+  const closePanel = (): void => setActivePanel(null)
   const [thinkingPhrases, setThinkingPhrases] = useState<string[]>([])
   const [thinkingPhrase, setThinkingPhrase] = useState('')
   const [thinkingTick, setThinkingTick] = useState(0)
@@ -219,7 +236,6 @@ export function App(): JSX.Element {
   const [sessions, setSessions] = useState<SessionSummary[]>([])
   const [sessionId, setSessionId] = useState<string>(() => crypto.randomUUID())
   const [currentTitle, setCurrentTitle] = useState('')
-  const [historyOpen, setHistoryOpen] = useState(false)
   const createdAtRef = useRef<number>(Date.now())
   // Set right before loading a saved session so the autosave effect skips the
   // render caused purely by the load (which would otherwise bump updatedAt).
@@ -230,6 +246,9 @@ export function App(): JSX.Element {
   // latest values without re-rendering on every chunk.
   const recorderRef = useRef<MediaRecorder | null>(null)
   const chunksRef = useRef<Blob[]>([])
+  // The <audio> element for the spoken reply currently playing, if any. Held in
+  // a ref so it can be paused/stopped without threading it through render state.
+  const currentAudioRef = useRef<HTMLAudioElement | null>(null)
   // Set when the user halts a transcription via the stop button, so the aborted
   // request rejects quietly instead of surfacing as a transcription error.
   const transcribeCancelledRef = useRef(false)
@@ -284,7 +303,7 @@ export function App(): JSX.Element {
           { kind: 'warning', text: 'Nothing to compact yet — the conversation is still short.' }
         ])
       }
-      setUsageOpen(false)
+      closePanel()
     } catch (err) {
       setEntries((e) => [...e, { kind: 'error', text: `Couldn't compact: ${String(err)}` }])
     } finally {
@@ -334,7 +353,7 @@ export function App(): JSX.Element {
   // Saves whatever is current first so nothing is lost when switching.
   function openSession(id: string): void {
     if (id === sessionId) {
-      setHistoryOpen(false)
+      closePanel()
       return
     }
     persistCurrent()
@@ -348,7 +367,7 @@ export function App(): JSX.Element {
         createdAtRef.current = session.createdAt
         setEntries(session.entries)
         setHistory(session.history)
-        setHistoryOpen(false)
+        closePanel()
       })
       .catch(() => {})
   }
@@ -471,7 +490,7 @@ export function App(): JSX.Element {
         source: info.source
       })
       if (info.error) setContextError(info.error)
-      else setContextEditorOpen(false)
+      else closePanel()
     } catch (err) {
       setContextError(String(err))
     } finally {
@@ -490,7 +509,7 @@ export function App(): JSX.Element {
       setServerStatus(result.online ? 'online' : 'offline')
       refreshContext()
       refreshTools()
-      if (result.online) setConnectionOpen(false)
+      if (result.online) closePanel()
       else setConnectionError('Saved, but the server is still unreachable at that URL.')
     } catch (err) {
       setConnectionError(String(err))
@@ -535,11 +554,26 @@ export function App(): JSX.Element {
       if (window.api.debug) {
         console.log(`[tts] renderer received audio event: ${event.base64.length} b64 chars`)
       }
-      void playAudio(event.base64, event.format)
+      void playAudio(event.base64, event.format, (audio) => {
+        // A newer reply supersedes any still-playing one: stop the old audio so
+        // replies don't overlap, then track the new element and mark us speaking.
+        currentAudioRef.current?.pause()
+        currentAudioRef.current = audio
+        setSpeaking(true)
+        const clear = (): void => {
+          if (currentAudioRef.current === audio) {
+            currentAudioRef.current = null
+            setSpeaking(false)
+          }
+        }
+        audio.addEventListener('ended', clear)
+        audio.addEventListener('pause', clear)
+      })
         .then(() => {
           if (window.api.debug) console.log('[tts] renderer playback started')
         })
         .catch((err) => {
+          setSpeaking(false)
           console.error('[tts] renderer playback failed:', err)
           setEntries((e) => [
             ...e,
@@ -558,6 +592,19 @@ export function App(): JSX.Element {
   async function toggleSpeak(): Promise<void> {
     const next = await window.api.setSpeak(!speak)
     setSpeak(next)
+    // Turning spoken replies off should also silence anything mid-playback.
+    if (!next) stopSpeaking()
+  }
+
+  // Halt the spoken reply currently playing (if any). Pausing fires the 'pause'
+  // listener wired up in the audio handler, which clears the ref and state.
+  function stopSpeaking(): void {
+    const audio = currentAudioRef.current
+    if (!audio) return
+    audio.pause()
+    audio.currentTime = 0
+    currentAudioRef.current = null
+    setSpeaking(false)
   }
 
   // Transcribe the just-finished recording and drop the recognized text into
@@ -755,10 +802,10 @@ export function App(): JSX.Element {
           Lemonade Stand
         </span>
         <div className="topbar-right">
-          <div className="context-control">
+          <div className="context-control server-connection">
             <button
               className={`server-status ${serverStatus}`}
-              onClick={() => setConnectionOpen((o) => !o)}
+              onClick={() => togglePanel('connection')}
               title={
                 (serverStatus === 'online'
                   ? 'Lemonade server is running'
@@ -774,58 +821,15 @@ export function App(): JSX.Element {
                   ? 'Server offline'
                   : 'Checking…'}
             </button>
-            {connectionOpen && (
+            {activePanel === 'connection' && (
               <ConnectionEditor
                 busy={connectionBusy}
                 error={connectionError}
                 onApply={applyConnection}
-                onClose={() => setConnectionOpen(false)}
+                onClose={closePanel}
               />
             )}
           </div>
-          {context !== null && (
-            <div className="context-control">
-              <button
-                className="context-size"
-                onClick={() => setContextEditorOpen((o) => !o)}
-                title={
-                  `Model context window: ${context.contextSize.toLocaleString()} tokens` +
-                  (context.maxContextWindow
-                    ? ` (max ${context.maxContextWindow.toLocaleString()})`
-                    : '') +
-                  '\nClick to change'
-                }
-              >
-                {context.contextSize.toLocaleString()} ctx ▾
-              </button>
-              {contextEditorOpen && (
-                <ContextEditor
-                  info={context}
-                  busy={contextBusy}
-                  error={contextError}
-                  onApply={applyContextSize}
-                  onClose={() => setContextEditorOpen(false)}
-                />
-              )}
-            </div>
-          )}
-          {breakdown !== null && (
-            <div className="context-control">
-              <ContextUsageBadge
-                breakdown={breakdown}
-                open={usageOpen}
-                onToggle={() => setUsageOpen((o) => !o)}
-              />
-              {usageOpen && (
-                <ContextUsage
-                  breakdown={breakdown}
-                  compacting={compacting}
-                  canCompact={history.length > 0 && !busy}
-                  onCompact={() => void compactNow()}
-                />
-              )}
-            </div>
-          )}
           <button
             className="speak-toggle"
             onClick={() => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))}
@@ -835,12 +839,12 @@ export function App(): JSX.Element {
             {theme === 'dark' ? '☀️' : '🌙'}
           </button>
           <button
-            className={`speak-toggle ${speak ? 'on' : ''}`}
-            onClick={() => void toggleSpeak()}
-            title={speak ? 'Spoken replies on' : 'Spoken replies off'}
-            aria-label={speak ? 'Spoken replies on' : 'Spoken replies off'}
+            className={`speak-toggle ${speaking ? 'stop-speaking' : speak ? 'on' : ''}`}
+            onClick={() => (speaking ? stopSpeaking() : void toggleSpeak())}
+            title={speaking ? 'Stop speaking' : speak ? 'Spoken replies on' : 'Spoken replies off'}
+            aria-label={speaking ? 'Stop speaking' : speak ? 'Spoken replies on' : 'Spoken replies off'}
           >
-            {speak ? <SpeakerWaveIcon /> : <SpeakerXMarkIcon />}
+            {speaking ? <StopSpeakingIcon /> : speak ? <SpeakerWaveIcon /> : <SpeakerXMarkIcon />}
           </button>
           <button
             className="pantry-toggle"
@@ -852,28 +856,23 @@ export function App(): JSX.Element {
           </button>
           <button
             className="pantry-toggle"
-            onClick={() => setHistoryOpen(true)}
+            onClick={() => setActivePanel('history')}
             title="Browse and continue past conversations"
           >
             <ClockIcon /> History
           </button>
           <button
-            className="pantry-toggle"
-            onClick={() => setModelsOpen(true)}
-            title="Choose the model the agent runs on"
-          >
-            <CpuChipIcon /> Models
-          </button>
-          <button
-            className="pantry-toggle"
-            onClick={() => setPantryOpen(true)}
-            title="Open the Pantry — stock tools & skills"
+            className="pantry-toggle pantry-toggle-primary"
+            onClick={() => setActivePanel('pantry')}
+            title={`Open the Pantry — stock tools & skills (${tools.length} tool${
+              tools.length === 1 ? '' : 's'
+            } connected)`}
           >
             <ArchiveBoxIcon /> Pantry
+            <span className="tools-badge" title={`${tools.length} tool${tools.length === 1 ? '' : 's'} connected`}>
+              {tools.length}
+            </span>
           </button>
-          <span className="tools-count">
-            {tools.length} tool{tools.length === 1 ? '' : 's'} connected
-          </span>
           <div className="window-controls">
             <button
               className="win-btn"
@@ -1011,22 +1010,75 @@ export function App(): JSX.Element {
         )}
       </div>
 
-      {pantryOpen && (
-        <Pantry onClose={() => setPantryOpen(false)} onChanged={refreshTools} />
+      <footer className="statusbar">
+        {context !== null && (
+          <div className="context-control statusbar-item">
+            <button
+              className="context-size"
+              onClick={() => togglePanel('context')}
+              title={
+                `Model context window: ${context.contextSize.toLocaleString()} tokens` +
+                (context.maxContextWindow
+                  ? ` (max ${context.maxContextWindow.toLocaleString()})`
+                  : '') +
+                '\nClick to change'
+              }
+            >
+              {context.contextSize.toLocaleString()} ctx ▴
+            </button>
+            {activePanel === 'context' && (
+              <ContextEditor
+                info={context}
+                busy={contextBusy}
+                error={contextError}
+                onApply={applyContextSize}
+                onClose={closePanel}
+              />
+            )}
+          </div>
+        )}
+        {breakdown !== null && (
+          <div className="context-control statusbar-item">
+            <ContextUsageBadge
+              breakdown={breakdown}
+              open={activePanel === 'usage'}
+              onToggle={() => togglePanel('usage')}
+            />
+            {activePanel === 'usage' && (
+              <ContextUsage
+                breakdown={breakdown}
+                compacting={compacting}
+                canCompact={history.length > 0 && !busy}
+                onCompact={() => void compactNow()}
+              />
+            )}
+          </div>
+        )}
+        <button
+          className="statusbar-btn"
+          onClick={() => setActivePanel('models')}
+          title="Choose the model the agent runs on"
+        >
+          <CpuChipIcon /> Models
+        </button>
+      </footer>
+
+      {activePanel === 'pantry' && (
+        <Pantry onClose={closePanel} onChanged={refreshTools} />
       )}
-      {historyOpen && (
+      {activePanel === 'history' && (
         <History
           sessions={sessions}
           activeId={sessionId}
           onOpen={openSession}
           onDelete={removeSession}
           onClear={clearHistory}
-          onClose={() => setHistoryOpen(false)}
+          onClose={closePanel}
         />
       )}
-      {modelsOpen && (
+      {activePanel === 'models' && (
         <Models
-          onClose={() => setModelsOpen(false)}
+          onClose={closePanel}
           onChanged={refreshContext}
         />
       )}
