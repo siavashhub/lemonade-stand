@@ -355,6 +355,8 @@ export function App(): JSX.Element {
     setCurrentTitle('')
     createdAtRef.current = Date.now()
     setSessionId(crypto.randomUUID())
+    setPlan(null)
+    setPlanExpanded(false)
   }
 
   // Load a saved conversation into the live view so the user can continue it.
@@ -375,6 +377,8 @@ export function App(): JSX.Element {
         createdAtRef.current = session.createdAt
         setEntries(session.entries)
         setHistory(session.history)
+        setPlan(null)
+        setPlanExpanded(false)
         closePanel()
       })
       .catch(() => {})
