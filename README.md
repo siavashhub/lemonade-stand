@@ -58,8 +58,21 @@ npm run build      # production build into out/
 ```
 
 Hover the **Lemonade Stand** brand text to see the version — `dev` in a local
-run, or the semantic version in an installed build. To package installers or cut
-a tagged release, see the [release guide](docs/RELEASING.md).
+run, or the semantic version in an installed build. To use packaged installers, see the [release guide](docs/RELEASING.md).
+
+### Lemonade Server Run
+The quickest way to run a lemonade server would to be install docker and run it using below command:
+
+```powershell
+docker run -d `
+  --name lemonade-server `
+  -p 13305:13305 `
+  -v lemonade-cache:/opt/lemonade/.cache/huggingface `
+  -v lemonade-llama:/opt/lemonade/llama `
+  -v lemonade-recipe:/opt/lemonade/.cache/lemonade `
+  ghcr.io/lemonade-sdk/lemonade-server:latest
+```
+Otherwise you can download the server from Lemonade server it self: (https://github.com/lemonade-sdk/lemonade)
 
 ## Enabling tools (MCP servers)
 

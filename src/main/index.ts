@@ -1,5 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu } from 'electron'
 import { randomUUID } from 'node:crypto'
+import { copyFileSync, existsSync, mkdirSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { AgentEvent, ApprovalDecision, ChatMessage, McpServerState } from '@shared/types'
@@ -20,7 +21,36 @@ import { Agent, type ApproveFn } from './agent/loop'
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url))
 
-const appPath = app.getAppPath()
+// Resolve the directory that holds the app's `config/` files (catalog, phrases,
+// servers, settings). In development that's the project root. In a packaged
+// build the bundled defaults ship read-only under `process.resourcesPath/config`
+// (see electron-builder.yml `extraResources`), while the app must also *write*
+// to servers.json / settings.json — so on first run we seed those defaults into
+// a writable per-user directory and read/write there afterwards. This fixes a
+// packaged app starting empty (no Pantry catalogue, no configured servers)
+// because it was looking for `config/` inside the read-only asar.
+function resolveConfigDir(): string {
+  if (!app.isPackaged) return app.getAppPath()
+
+  const userConfigBase = app.getPath('userData')
+  const userConfigDir = join(userConfigBase, 'config')
+  const bundledConfigDir = join(process.resourcesPath, 'config')
+  try {
+    mkdirSync(userConfigDir, { recursive: true })
+    for (const name of readdirSync(bundledConfigDir)) {
+      const dest = join(userConfigDir, name)
+      // Seed each default only once; never clobber the user's own edits.
+      if (!existsSync(dest)) copyFileSync(join(bundledConfigDir, name), dest)
+    }
+    return userConfigBase
+  } catch {
+    // If seeding fails for any reason, fall back to the bundled (read-only)
+    // defaults so the app at least starts with a populated catalogue.
+    return process.resourcesPath
+  }
+}
+
+const appPath = resolveConfigDir()
 const config = loadConfig(appPath)
 const lemonade = new LemonadeClient(
   config.lemonadeBaseUrl,

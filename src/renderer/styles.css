@@ -95,6 +95,9 @@ body {
   align-items: center;
   gap: 8px;
   font-weight: 600;
+  /* Opt out of the drag region so the native title tooltip (app version)
+     fires on hover. */
+  -webkit-app-region: no-drag;
 }
 
 .brand-logo {
