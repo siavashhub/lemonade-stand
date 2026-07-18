@@ -3,7 +3,7 @@ import type {
   ChatCompletionMessageToolCall,
   ChatCompletionTool
 } from 'openai/resources/chat/completions'
-import type { AgentEvent, ChatMessage } from '@shared/types'
+import type { AgentEvent, ChatMessage, PlanStep } from '@shared/types'
 import type { LemonadeClient } from '../lemonade/client'
 import type { McpManager } from '../mcp/manager'
 
@@ -16,6 +16,52 @@ export type ApproveFn = (params: {
   qualified: string
   args: unknown
 }) => Promise<boolean>
+
+// Name of the built-in planning tool. It is not backed by an MCP server: the
+// loop synthesizes it, handles its calls internally, and surfaces the plan to
+// the UI. Kept flat (no `__` namespace) so it can't collide with a server tool.
+const PLAN_TOOL = 'update_plan'
+
+// Schema for the built-in planning tool, appended to the MCP tool catalogue so
+// the model can optionally lay out — and revise — a short todo list for
+// multi-step work. The model always sends the full list; statuses drive the
+// live checklist in the UI.
+const PLAN_TOOL_DEF: ChatCompletionTool = {
+  type: 'function',
+  function: {
+    name: PLAN_TOOL,
+    description:
+      'Create or revise a short todo plan for a multi-step task. Call this before ' +
+      'starting non-trivial work to lay out the steps, then call it again as you ' +
+      'progress to mark steps in-progress or completed. Always pass the FULL, ' +
+      'current list of steps. Skip this for simple one-step requests.',
+    parameters: {
+      type: 'object',
+      properties: {
+        steps: {
+          type: 'array',
+          description: 'The full, ordered list of plan steps in their current state.',
+          items: {
+            type: 'object',
+            properties: {
+              title: {
+                type: 'string',
+                description: 'Short imperative description of the step.'
+              },
+              status: {
+                type: 'string',
+                enum: ['pending', 'in-progress', 'completed'],
+                description: 'Current state of this step.'
+              }
+            },
+            required: ['title', 'status']
+          }
+        }
+      },
+      required: ['steps']
+    }
+  }
+}
 
 // Bounded tool-calling loop. Each user turn:
 //   1. ask lemond for a completion with the current MCP tool catalogue;
@@ -42,7 +88,8 @@ export class Agent {
     signal?: AbortSignal
   ): Promise<void> {
     const messages = history as ChatCompletionMessageParam[]
-    const tools = this.mcp.getOpenAiTools()
+    // Expose the MCP tools plus the built-in planning tool for this turn.
+    const tools = [...this.mcp.getOpenAiTools(), PLAN_TOOL_DEF]
 
     // Prime the model to actually call tools rather than describe them. Only
     // inject if the caller hasn't already supplied a system message.
@@ -225,6 +272,26 @@ export class Agent {
     return true
   }
 
+  /**
+   * Coerce the model's `update_plan` arguments into a clean PlanStep[]. Tolerant
+   * of a weak model's rough output: drops non-object/empty steps, trims titles,
+   * and defaults an unknown status to 'pending' so the UI always gets valid data.
+   */
+  private normalizePlan(args: Record<string, unknown>): PlanStep[] {
+    const raw = Array.isArray(args.steps) ? args.steps : []
+    const steps: PlanStep[] = []
+    for (const item of raw) {
+      if (!item || typeof item !== 'object') continue
+      const rec = item as Record<string, unknown>
+      const title = typeof rec.title === 'string' ? rec.title.trim() : ''
+      if (!title) continue
+      const status =
+        rec.status === 'in-progress' || rec.status === 'completed' ? rec.status : 'pending'
+      steps.push({ title, status })
+    }
+    return steps
+  }
+
   private async executeCall(
     call: ChatCompletionMessageToolCall,
     messages: ChatCompletionMessageParam[],
@@ -239,6 +306,23 @@ export class Agent {
       args = call.function.arguments ? JSON.parse(call.function.arguments) : {}
     } catch {
       // Malformed arguments -> hand the error back to the model to retry.
+    }
+
+    // The built-in planning tool is handled in-process: no MCP server owns it
+    // and it never needs user approval. Surface the plan to the UI and hand a
+    // short acknowledgement back to the model so it keeps working.
+    if (qualified === PLAN_TOOL) {
+      const steps = this.normalizePlan(args)
+      emit({ type: 'plan_updated', steps })
+      messages.push({
+        role: 'tool',
+        tool_call_id: call.id,
+        content:
+          steps.length > 0
+            ? `Plan updated (${steps.length} steps). Continue working through it.`
+            : 'Plan cleared.'
+      })
+      return
     }
 
     const [serverId, ...rest] = qualified.split('__')

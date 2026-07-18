@@ -666,6 +666,17 @@ export function App(): JSX.Element {
           ...e,
           { kind: 'tool', label: `${event.server} ← ${event.tool}`, detail: event.preview, ok: event.ok }
         ])
+      } else if (event.type === 'plan_updated') {
+        // The model laid out or revised its plan. Update the existing checklist
+        // in place so the transcript shows one evolving plan, not a new copy per
+        // revision; only append when this is the first plan of the turn.
+        setEntries((e) => {
+          const idx = e.map((x) => x.kind).lastIndexOf('plan')
+          if (idx === -1) return [...e, { kind: 'plan', steps: event.steps }]
+          const next = e.slice()
+          next[idx] = { kind: 'plan', steps: event.steps }
+          return next
+        })
       } else if (event.type === 'tool_approval_request') {
         setApprovals((a) => [
           ...a,
@@ -1597,6 +1608,27 @@ function Line({ entry }: { entry: Entry }): JSX.Element {
       <div className={`line tool ${entry.ok === false ? 'tool-err' : ''}`}>
         <span className="tool-label">{entry.label}</span>
         <span className="tool-detail">{entry.detail}</span>
+      </div>
+    )
+  }
+  if (entry.kind === 'plan') {
+    const done = entry.steps.filter((s) => s.status === 'completed').length
+    return (
+      <div className="line plan">
+        <div className="plan-head">
+          <span className="plan-title">Plan</span>
+          <span className="plan-count">
+            {done}/{entry.steps.length}
+          </span>
+        </div>
+        <ul className="plan-list">
+          {entry.steps.map((step, i) => (
+            <li key={i} className={`plan-step ${step.status}`}>
+              <span className="plan-mark" aria-hidden="true" />
+              <span className="plan-step-text">{step.title}</span>
+            </li>
+          ))}
+        </ul>
       </div>
     )
   }

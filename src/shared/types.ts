@@ -13,6 +13,16 @@ export interface ChatMessage {
   name?: string
 }
 
+/** One step in the agent's working plan for a multi-step task. The model
+ * creates and revises the whole list via the built-in `update_plan` tool; the
+ * UI renders it as a live checklist. */
+export interface PlanStep {
+  /** Short imperative description of the step, e.g. "Read the config file". */
+  title: string
+  /** Lifecycle state, driven by the model as it works through the plan. */
+  status: 'pending' | 'in-progress' | 'completed'
+}
+
 /** A tool the agent can call, flattened from all connected MCP servers. */
 export interface AgentTool {
   /** Namespaced as `<serverId>__<toolName>` to avoid collisions. */
@@ -171,6 +181,7 @@ export type TranscriptEntry =
   | { kind: 'user'; text: string }
   | { kind: 'assistant'; text: string }
   | { kind: 'tool'; label: string; detail: string; ok?: boolean }
+  | { kind: 'plan'; steps: PlanStep[] }
   | { kind: 'warning'; text: string }
   | { kind: 'error'; text: string }
 
@@ -204,6 +215,9 @@ export type AgentEvent =
   | { type: 'assistant_text'; text: string }
   | { type: 'tool_call'; server: string; tool: string; args: unknown }
   | { type: 'tool_result'; server: string; tool: string; ok: boolean; preview: string }
+  // The model created or revised its working plan via the built-in `update_plan`
+  // tool. `steps` is the full, current checklist the renderer should display.
+  | { type: 'plan_updated'; steps: PlanStep[] }
   // Main is blocked awaiting a decision; renderer must call respondApproval(id, ...).
   | { type: 'tool_approval_request'; id: string; server: string; tool: string; args: unknown }
   // Synthesized speech for an assistant turn (base64-encoded audio bytes).
