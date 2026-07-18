@@ -613,28 +613,46 @@ export class LemonadeClient {
   }
 
   /**
-   * Single (non-streamed) chat completion. Tools are passed straight through
-   * in OpenAI function-tool shape; the model may respond with tool_calls that
-   * the agent loop is responsible for executing.
+   * Single chat completion. Tools are passed straight through in OpenAI
+   * function-tool shape; the model may respond with tool_calls that the agent
+   * loop is responsible for executing.
+   *
+   * The request is *streamed* even though callers only consume the final,
+   * reassembled result. This is deliberate and load-bearing for the stop
+   * button: with a non-streamed request, aborting the fetch closes the socket,
+   * but the OpenAI-compatible backend (llama.cpp / OGA) doesn't notice the
+   * client is gone until it writes the response — which never happens until the
+   * whole reply is generated — so it keeps the GPU/NPU busy to completion (the
+   * fan keeps spinning). Streaming makes the backend write a chunk per token,
+   * so the dropped connection is detected on the next token and generation
+   * stops promptly when the user hits stop.
    */
   async chat(
     messages: ChatCompletionMessageParam[],
     tools: ChatCompletionTool[],
     signal?: AbortSignal
   ): Promise<OpenAI.Chat.Completions.ChatCompletion.Choice> {
-    const response = await this.client.chat.completions.create(
+    const stream = this.client.beta.chat.completions.stream(
       {
         model: this.model,
         messages,
         tools: tools.length > 0 ? tools : undefined,
-        tool_choice: tools.length > 0 ? 'auto' : undefined,
-        stream: false
+        tool_choice: tools.length > 0 ? 'auto' : undefined
       },
       { signal }
     )
-    const choice = response.choices[0]
-    if (!choice) throw new Error('lemond returned no choices')
-    return choice
+    // If the caller aborts, tear the stream (and its socket) down immediately so
+    // the server stops generating instead of running to completion unheard.
+    const onAbort = (): void => stream.controller.abort()
+    signal?.addEventListener('abort', onAbort, { once: true })
+    try {
+      const response = await stream.finalChatCompletion()
+      const choice = response.choices[0]
+      if (!choice) throw new Error('lemond returned no choices')
+      return choice
+    } finally {
+      signal?.removeEventListener('abort', onAbort)
+    }
   }
 
   /**
