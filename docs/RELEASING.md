@@ -123,6 +123,24 @@ release is created — fix the issue, then retag.
 > A vulnerability found here means a dependency needs updating. Run
 > `npm audit fix` (or bump the offending package), commit, and retag.
 
+## Hotfix
+If fixes can be done on on new release then continue usual flow, if not 
+and a patch/hotfix is needed for previous release:
+
+```powershell
+git checkout release/0.2
+git checkout -b hotfix/0.2.1 v0.2.0     # <-- off the TAG, not main
+```
+
+PR into release/0.2
+```powershell
+git checkout release/0.2
+git tag v0.2.1
+```
+
+Finally cherry pick hotfix commits to main
+
+
 ## Local packaging (no release)
 
 To build installers without tagging:
