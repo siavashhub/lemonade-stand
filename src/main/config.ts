@@ -112,7 +112,8 @@ export function loadConfig(cwd: string = process.cwd()): AppConfig {
     stt: {
       model: process.env.LEMONADE_STT_MODEL ?? 'whisper-base'
     },
-    debug: (process.env.LOG_LEVEL ?? 'info').toLowerCase() === 'debug',
+    debug:
+      (saved.logLevel ?? process.env.LOG_LEVEL ?? 'info').toLowerCase() === 'debug',
     servers
   }
 }
@@ -146,6 +147,9 @@ export interface AppSettings {
   apiKey?: string
   /** Whether spoken replies (TTS) were last left on or off by the user. */
   speak?: boolean
+  /** Diagnostic log level. Set to "debug" to mirror all logs to a file
+   * (config/settings.json). Takes precedence over the LOG_LEVEL env var. */
+  logLevel?: string
 }
 
 /** Read persisted UI/app settings. Missing or malformed file -> empty. */
