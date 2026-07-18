@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "description": "A desktop MCP client / agent host that drives local models served by Lemonade (lemond) over HTTP.",
   "author": "",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "type": "module",
   "main": "./out/main/index.js",
   "scripts": {
