@@ -32,28 +32,44 @@ things:
 The gate runs both locally (`npm run check-release`) and as the first CI job, so
 a release is impossible without its notes file.
 
-## Cutting a release
+## Starting work on a new sprint
+Create a new release branch if not exists
+```powershell
+git checkout -b release/0.2
+git push --set-upstream origin release/0.2
+```
 
-The first release is **`v0.0.1`** (already prepared). For subsequent releases,
-follow these steps. All commands are PowerShell-friendly.
+work on the release branch like below example:
+```powershell
+git add package.json
+git commit -m "add: updated package file"
+git push 
+```
+
+## Cutting a release
+When ready to create a cut follow below:
 
 ### 1. Bump the version
 
-Update `version` in `package.json` to the new semantic version (e.g. `0.0.2`).
+Update `version` in `package.json` to the new semantic version (e.g. `0.2.0`).
 You can do it by hand or with npm (which also creates a matching git tag —
 remove `--git-tag-version` if you'd rather tag manually):
 
 ```powershell
-npm version patch --no-git-tag-version   # 0.0.1 -> 0.0.2 (use minor / major as needed)
+npm version 0.2.0 --no-git-tag-version
 ```
+
+Other examples:
+- npm version patch --no-git-tag-version
+- npm version minor --no-git-tag-version   
 
 ### 2. Write the release notes
 
 Copy the template and fill it in. The filename **must** be `v<version>.md`:
 
 ```powershell
-Copy-Item releases/TEMPLATE.md releases/v0.0.2.md
-# edit releases/v0.0.2.md — this text becomes the GitHub Release body
+Copy-Item releases/TEMPLATE.md releases/v0.2.0.md
+# edit releases/v0.2.0.md — this text becomes the GitHub Release body
 ```
 
 ### 3. Validate locally (the gate)
@@ -73,19 +89,6 @@ npm run package:win        # or package:mac / package:linux
 
 ### 4. Commit, tag, and push
 
-```powershell
-git checkout -b release/0.2
-git push --set-upstream origin release/0.2
-```
-
-work on the release branch...
-```powershell
-git add package.json
-git commit -m "add: updated package file"
-git push 
-```
-
-When ready to cut a release, create a release file and commit and push:
 ```powershell
 git add releases/v0.2.0.md
 git commit -m "add: Release v0.2.0"
@@ -119,6 +122,24 @@ release is created — fix the issue, then retag.
 
 > A vulnerability found here means a dependency needs updating. Run
 > `npm audit fix` (or bump the offending package), commit, and retag.
+
+## Hotfix
+If fixes can be done on on new release then continue usual flow, if not 
+and a patch/hotfix is needed for previous release:
+
+```powershell
+git checkout release/0.2
+git checkout -b hotfix/0.2.1 v0.2.0     # <-- off the TAG, not main
+```
+
+PR into release/0.2
+```powershell
+git checkout release/0.2
+git tag v0.2.1
+```
+
+Finally cherry pick hotfix commits to main
+
 
 ## Local packaging (no release)
 
