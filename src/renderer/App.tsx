@@ -1172,9 +1172,12 @@ function ContextUsage({
   canCompact: boolean
   onCompact: () => void
 }): JSX.Element {
-  const { contextSize, reserve, usedTokens, categories } = breakdown
+  const { contextSize, usedTokens, categories } = breakdown
+  // Guard against a missing/NaN reserve (e.g. an out-of-date backend that omits
+  // the field) so it can never poison the gradient string or render as "NaN".
+  const reserve = Number.isFinite(breakdown.reserve) ? breakdown.reserve : 0
   const pct = (n: number): number =>
-    contextSize > 0 ? Math.round((n / contextSize) * 1000) / 10 : 0
+    contextSize > 0 && Number.isFinite(n) ? Math.round((n / contextSize) * 1000) / 10 : 0
   const usedPct = contextSize > 0 ? Math.min(100, Math.round((usedTokens / contextSize) * 100)) : 0
 
   // Legend rows in draw order; the donut ring is built from the same list so
@@ -1189,7 +1192,10 @@ function ContextUsage({
 
   // Build the conic-gradient ring: each category takes its share of the whole
   // window, followed by the hatched reserve slice, then the empty remainder.
-  const frac = (n: number): number => (contextSize > 0 ? Math.max(0, n / contextSize) : 0)
+  // `frac` guards non-finite inputs so a single bad value can't produce a
+  // `NaN%` stop that would invalidate the whole gradient (and hide the ring).
+  const frac = (n: number): number =>
+    contextSize > 0 && Number.isFinite(n) ? Math.max(0, n / contextSize) : 0
   let acc = 0
   const stops: string[] = []
   for (const it of items) {
