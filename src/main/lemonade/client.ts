@@ -3,7 +3,8 @@ import type {
   ChatCompletionMessageParam,
   ChatCompletionTool
 } from 'openai/resources/chat/completions'
-import type { ContextBreakdown, ContextInfo, ModelInfo } from '@shared/types'
+import type { ContextInfo, ModelInfo } from '@shared/types'
+
 // Fallback context window used only when no override is configured and the
 // server can't be reached to report the loaded model's runtime context.
 const DEFAULT_CONTEXT_SIZE = 4096
@@ -65,7 +66,6 @@ export class LemonadeClient {
   private client: OpenAI
   private model: string
   private baseURL: string
-  private apiKey: string
   private contextOverride?: number
   private completionReserve: number
   // Cached server-reported context size, so we don't refetch every step. Only a
@@ -95,7 +95,6 @@ export class LemonadeClient {
     })
     this.model = model
     this.baseURL = baseURL
-    this.apiKey = apiKey
     this.contextOverride = contextOverride && contextOverride > 0 ? contextOverride : undefined
     this.completionReserve = completionReserve
   }
@@ -103,28 +102,6 @@ export class LemonadeClient {
   /** The id of the model currently configured as the agent's chat model. */
   get activeModel(): string {
     return this.model
-  }
-
-  /** The Lemonade server this client currently targets (base URL + API key),
-   * surfaced so the UI can show and edit the active connection. */
-  get connection(): { baseUrl: string; apiKey: string } {
-    return { baseUrl: this.baseURL, apiKey: this.apiKey }
-  }
-
-  /**
-   * Repoint this client at a different Lemonade server. Recreates the OpenAI
-   * client with the new base URL / key and clears every server-derived cache so
-   * nothing from the old server leaks across (context sizes, resolved TTS and
-   * transcription model ids). Callers persist the choice and re-probe health.
-   */
-  setConnection(baseURL: string, apiKey: string): void {
-    this.baseURL = baseURL
-    this.apiKey = apiKey
-    this.client = new OpenAI({ baseURL, apiKey: apiKey || 'lemonade' })
-    this.cachedServerContext = undefined
-    this.cachedMaxContext = undefined
-    this.cachedTtsModel = undefined
-    this.cachedTranscriptionModel = undefined
   }
 
   /**
@@ -548,169 +525,24 @@ export class LemonadeClient {
   }
 
   /**
-   * Break the estimated prompt size down by category so the UI can show where
-   * the context window is going. Uses the same ~4-chars-per-token heuristic as
-   * `estimateTokens`, applied to each subset. `systemPrompt` is folded into the
-   * system-instructions bucket when the history doesn't already carry a system
-   * message (mirroring what the agent loop injects before sending).
-   */
-  async contextBreakdown(
-    messages: ChatCompletionMessageParam[],
-    tools: ChatCompletionTool[],
-    systemPrompt: string
-  ): Promise<ContextBreakdown> {
-    const { size } = await this.resolveContextSize()
-    const est = (s: string): number => Math.ceil(s.length / 4)
-    const contentOf = (m: ChatCompletionMessageParam): string =>
-      typeof m.content === 'string' ? m.content : JSON.stringify(m.content ?? '')
-
-    // The loop injects the system prompt only when none is present already.
-    const hasSystem = messages.some((m) => m.role === 'system')
-    const systemText =
-      messages
-        .filter((m) => m.role === 'system')
-        .map(contentOf)
-        .join('') + (hasSystem ? '' : systemPrompt)
-
-    const messagesText = messages
-      .filter((m) => m.role === 'user' || m.role === 'assistant')
-      .map(contentOf)
-      .join('')
-    const toolResultsText = messages
-      .filter((m) => m.role === 'tool')
-      .map(contentOf)
-      .join('')
-    const toolDefsText = JSON.stringify(tools ?? [])
-
-    const systemInstructions = est(systemText)
-    const toolDefinitions = est(toolDefsText)
-    const messagesTokens = est(messagesText)
-    const toolResults = est(toolResultsText)
-
-    // Total is estimated the same way the budget check does, so the indicator
-    // agrees with the warn/overflow logic. `other` captures JSON structural
-    // overhead (roles, ids, keys) not attributed to a content bucket above.
-    const effective = hasSystem
-      ? messages
-      : [{ role: 'system', content: systemPrompt } as ChatCompletionMessageParam, ...messages]
-    const usedTokens = this.estimateTokens(effective, tools)
-    const categorized = systemInstructions + toolDefinitions + messagesTokens + toolResults
-    const other = Math.max(0, usedTokens - categorized)
-
-    return {
-      model: this.model,
-      contextSize: size,
-      reserve: this.completionReserve,
-      usedTokens,
-      categories: {
-        systemInstructions,
-        toolDefinitions,
-        messages: messagesTokens,
-        toolResults,
-        other
-      }
-    }
-  }
-
-  /**
    * Single (non-streamed) chat completion. Tools are passed straight through
    * in OpenAI function-tool shape; the model may respond with tool_calls that
    * the agent loop is responsible for executing.
    */
   async chat(
     messages: ChatCompletionMessageParam[],
-    tools: ChatCompletionTool[],
-    signal?: AbortSignal
+    tools: ChatCompletionTool[]
   ): Promise<OpenAI.Chat.Completions.ChatCompletion.Choice> {
-    const response = await this.client.chat.completions.create(
-      {
-        model: this.model,
-        messages,
-        tools: tools.length > 0 ? tools : undefined,
-        tool_choice: tools.length > 0 ? 'auto' : undefined,
-        stream: false
-      },
-      { signal }
-    )
+    const response = await this.client.chat.completions.create({
+      model: this.model,
+      messages,
+      tools: tools.length > 0 ? tools : undefined,
+      tool_choice: tools.length > 0 ? 'auto' : undefined,
+      stream: false
+    })
     const choice = response.choices[0]
     if (!choice) throw new Error('lemond returned no choices')
     return choice
-  }
-
-  /**
-   * Compress a slice of conversation into a dense prose summary the agent can
-   * carry forward in place of the raw messages. Runs a plain (tool-free) chat
-   * completion so it can't trigger side effects. `priorSummary` folds an earlier
-   * compaction back in so summaries don't accumulate as the chat grows.
-   */
-  async summarize(
-    messages: ChatCompletionMessageParam[],
-    priorSummary?: string,
-    signal?: AbortSignal
-  ): Promise<string> {
-    const transcript = messages
-      .map((m) => {
-        const content =
-          typeof m.content === 'string' ? m.content : JSON.stringify(m.content ?? '')
-        return `${m.role.toUpperCase()}: ${content}`
-      })
-      .join('\n')
-    const body =
-      (priorSummary ? `Summary of the conversation so far:\n${priorSummary}\n\n` : '') +
-      `Newer messages to fold in:\n${transcript}`
-    const choice = await this.chat(
-      [
-        {
-          role: 'system',
-          content:
-            'You compress conversations so they can continue within a limited context ' +
-            'window. Produce a concise summary that preserves facts, decisions, task ' +
-            'state, file names, identifiers, and any open questions or next steps. Write a ' +
-            'few short paragraphs. Do not add commentary, preamble, or a title.'
-        },
-        { role: 'user', content: body }
-      ],
-      [],
-      signal
-    )
-    return choice.message.content?.trim() ?? ''
-  }
-
-  /**
-   * Ask the model for a short, specific conversation title. Best-effort: on any
-   * failure the caller falls back to a trimmed first user message, so a slow or
-   * offline server never blocks saving a session.
-   */
-  async generateTitle(
-    messages: ChatCompletionMessageParam[],
-    signal?: AbortSignal
-  ): Promise<string> {
-    const snippet = messages
-      .filter((m) => m.role === 'user' || m.role === 'assistant')
-      .slice(0, 4)
-      .map((m) => {
-        const content =
-          typeof m.content === 'string' ? m.content : JSON.stringify(m.content ?? '')
-        return `${m.role.toUpperCase()}: ${content}`
-      })
-      .join('\n')
-      .slice(0, 2000)
-    const choice = await this.chat(
-      [
-        {
-          role: 'system',
-          content:
-            'Generate a short, specific title (3 to 6 words) for the conversation. Reply ' +
-            'with only the title: no quotes, no trailing punctuation, no "Title:" prefix.'
-        },
-        { role: 'user', content: snippet }
-      ],
-      [],
-      signal
-    )
-    const raw = choice.message.content?.trim() ?? ''
-    // Strip wrapping quotes and any trailing period the model adds anyway.
-    return raw.replace(/^["'\s]+|["'\s.]+$/g, '').slice(0, 60)
   }
 
   /**
@@ -793,12 +625,7 @@ export class LemonadeClient {
    * filename extension so the server can decode it. The model id is resolved
    * against the server so a stale/renamed model can't silently break dictation.
    */
-  async transcribe(
-    audioBase64: string,
-    mimeType: string,
-    model: string,
-    signal?: AbortSignal
-  ): Promise<string> {
+  async transcribe(audioBase64: string, mimeType: string, model: string): Promise<string> {
     const resolvedModel = await this.resolveTranscriptionModel(model)
     const bytes = Buffer.from(audioBase64, 'base64')
     const ext = mimeType.includes('webm')
@@ -813,13 +640,10 @@ export class LemonadeClient {
               ? 'mp3'
               : 'webm'
     const file = await toFile(bytes, `speech.${ext}`, { type: mimeType || 'audio/webm' })
-    const response = await this.client.audio.transcriptions.create(
-      {
-        model: resolvedModel,
-        file
-      },
-      { signal }
-    )
+    const response = await this.client.audio.transcriptions.create({
+      model: resolvedModel,
+      file
+    })
     return response.text ?? ''
   }
 }

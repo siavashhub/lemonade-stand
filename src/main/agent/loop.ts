@@ -17,6 +17,16 @@ export type ApproveFn = (params: {
   args: unknown
 }) => Promise<boolean>
 
+// Asked when the agent exhausts its step budget without a final answer.
+// Resolves true to grant another budget and keep going, false to stop. The main
+// process implements this by prompting the renderer; a non-interactive caller
+// can omit it, in which case the agent stops at the limit as before.
+export type ContinueFn = (steps: number) => Promise<boolean>
+
+// Safety valve: if the model calls only `update_plan` this many turns in a row
+// without doing any real work, stop rather than spin forever on plan edits.
+const MAX_PLAN_ONLY_STREAK = 8
+
 // Name of the built-in planning tool. It is not backed by an MCP server: the
 // loop synthesizes it, handles its calls internally, and surfaces the plan to
 // the UI. Kept flat (no `__` namespace) so it can't collide with a server tool.
@@ -85,7 +95,8 @@ export class Agent {
     history: ChatMessage[],
     emit: (event: AgentEvent) => void,
     approve: ApproveFn,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    onLimit?: ContinueFn
   ): Promise<void> {
     const messages = history as ChatCompletionMessageParam[]
     // Expose the MCP tools plus the built-in planning tool for this turn.
@@ -98,7 +109,13 @@ export class Agent {
     }
 
     try {
-      for (let step = 0; step < this.maxSteps; step++) {
+      // `step` counts only turns that did real work; `update_plan`-only turns
+      // are free so planning doesn't eat the work budget. `limit` starts at
+      // maxSteps and is extended each time the user opts to keep going.
+      let step = 0
+      let limit = this.maxSteps
+      let planOnlyStreak = 0
+      for (;;) {
         // The user asked to halt: stop before starting more work.
         if (signal?.aborted) {
           emit({ type: 'done' })
@@ -155,16 +172,51 @@ export class Agent {
           return
         }
 
+        // Execute every requested call. A turn "did real work" if it invoked at
+        // least one non-planning tool; a plan-only turn stays free.
+        let didRealWork = false
         for (const call of toolCalls) {
+          if (call.type === 'function' && call.function.name !== PLAN_TOOL) {
+            didRealWork = true
+          }
           await this.executeCall(call, messages, emit, approve)
         }
-      }
 
-      emit({
-        type: 'error',
-        message: `Reached step limit (${this.maxSteps}) without a final answer.`
-      })
-      emit({ type: 'done' })
+        if (didRealWork) {
+          step++
+          planOnlyStreak = 0
+        } else {
+          // Free plan-only turn — but guard against a model that loops forever
+          // revising its plan without ever acting on it.
+          if (++planOnlyStreak >= MAX_PLAN_ONLY_STREAK) {
+            emit({
+              type: 'error',
+              message:
+                'The agent kept updating its plan without making progress, so it was stopped.'
+            })
+            emit({ type: 'done' })
+            return
+          }
+          continue
+        }
+
+        // Budget exhausted without a final answer. Ask the user whether to keep
+        // going (each yes grants another budget); non-interactive callers stop.
+        if (step >= limit) {
+          const keepGoing = onLimit ? await onLimit(limit) : false
+          if (!keepGoing) {
+            if (!onLimit) {
+              emit({
+                type: 'error',
+                message: `Reached step limit (${limit}) without a final answer.`
+              })
+            }
+            emit({ type: 'done' })
+            return
+          }
+          limit += this.maxSteps
+        }
+      }
     } catch (err) {
       // A user-triggered halt surfaces as an abort; end quietly rather than
       // reporting it as a failure.

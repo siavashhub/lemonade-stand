@@ -10,6 +10,7 @@ import type {
   ContextInfo,
   McpServerState,
   ModelInfo,
+  PlanStep,
   SessionSummary,
   TranscriptEntry
 } from '@shared/types'
@@ -207,6 +208,13 @@ export function App(): JSX.Element {
   const [recording, setRecording] = useState(false)
   const [transcribing, setTranscribing] = useState(false)
   const [approvals, setApprovals] = useState<PendingApproval[]>([])
+  // Pending "keep going past the step limit?" prompt, or null when none.
+  const [stepLimit, setStepLimit] = useState<{ id: string; steps: number } | null>(null)
+  // The agent's current working plan (from the update_plan tool), shown in a
+  // sticky bar above the composer. Null when there's no active plan.
+  const [plan, setPlan] = useState<PlanStep[] | null>(null)
+  // Whether the sticky plan bar is expanded to show the full checklist.
+  const [planExpanded, setPlanExpanded] = useState(false)
   const [serverStatus, setServerStatus] = useState<ServerStatus>('checking')
   const [connectionBusy, setConnectionBusy] = useState(false)
   const [connectionError, setConnectionError] = useState<string | null>(null)
@@ -542,7 +550,7 @@ export function App(): JSX.Element {
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight })
-  }, [entries, approvals, busy])
+  }, [entries, approvals, busy, stepLimit])
 
   // Persistent listener for synthesized speech. TTS is fire-and-forget in the
   // main process, so the 'audio' event often arrives *after* the per-turn
@@ -587,6 +595,13 @@ export function App(): JSX.Element {
   function decide(id: string, decision: ApprovalDecision): void {
     window.api.respondApproval(id, decision)
     setApprovals((a) => a.filter((p) => p.id !== id))
+  }
+
+  // Answer the "keep going past the step limit?" prompt. Continuing grants the
+  // agent another budget; stopping ends the turn.
+  function decideContinue(cont: boolean): void {
+    if (stepLimit) window.api.respondStepLimit(stepLimit.id, cont)
+    setStepLimit(null)
   }
 
   async function toggleSpeak(): Promise<void> {
@@ -688,6 +703,9 @@ export function App(): JSX.Element {
     if (!text || busy) return
     setInput('')
     setBusy(true)
+    // Clear any previous turn's plan so the sticky bar reflects only this turn.
+    setPlan(null)
+    setPlanExpanded(false)
 
     const userMsg: ChatMessage = { role: 'user', content: text }
     const nextHistory = [...history, userMsg]
@@ -714,21 +732,17 @@ export function App(): JSX.Element {
           { kind: 'tool', label: `${event.server} ← ${event.tool}`, detail: event.preview, ok: event.ok }
         ])
       } else if (event.type === 'plan_updated') {
-        // The model laid out or revised its plan. Update the existing checklist
-        // in place so the transcript shows one evolving plan, not a new copy per
-        // revision; only append when this is the first plan of the turn.
-        setEntries((e) => {
-          const idx = e.map((x) => x.kind).lastIndexOf('plan')
-          if (idx === -1) return [...e, { kind: 'plan', steps: event.steps }]
-          const next = e.slice()
-          next[idx] = { kind: 'plan', steps: event.steps }
-          return next
-        })
+        // The model laid out or revised its plan. Drive the sticky plan bar
+        // above the composer; it stays visible and updates in place as the
+        // model works through the steps.
+        setPlan(event.steps)
       } else if (event.type === 'tool_approval_request') {
         setApprovals((a) => [
           ...a,
           { id: event.id, server: event.server, tool: event.tool, args: event.args }
         ])
+      } else if (event.type === 'step_limit_request') {
+        setStepLimit({ id: event.id, steps: event.steps })
       } else if (event.type === 'context_warning') {
         const usable = event.contextSize - event.reserve
         const text = event.overflow
@@ -748,6 +762,7 @@ export function App(): JSX.Element {
         setEntries((e) => [...e, { kind: 'error', text: event.message }])
       } else if (event.type === 'done') {
         off()
+        setStepLimit(null)
         setHistory((h) => [...h, ...collected])
         setBusy(false)
       }
@@ -801,35 +816,26 @@ export function App(): JSX.Element {
           </svg>
           Lemonade Stand
         </span>
-        <div className="topbar-right">
-          <div className="context-control server-connection">
+        <div className="topbar-center">
+          <div className="session-seg">
             <button
-              className={`server-status ${serverStatus}`}
-              onClick={() => togglePanel('connection')}
-              title={
-                (serverStatus === 'online'
-                  ? 'Lemonade server is running'
-                  : serverStatus === 'offline'
-                    ? 'Lemonade server is unreachable — start lemond to chat'
-                    : 'Checking Lemonade server…') + '\nClick to configure the connection'
-              }
+              className="session-seg-btn primary"
+              onClick={newSession}
+              disabled={busy}
+              title="Save this chat and start a new one"
             >
-              <span className="server-dot" />
-              {serverStatus === 'online'
-                ? 'Server online'
-                : serverStatus === 'offline'
-                  ? 'Server offline'
-                  : 'Checking…'}
+              ＋ New Session
             </button>
-            {activePanel === 'connection' && (
-              <ConnectionEditor
-                busy={connectionBusy}
-                error={connectionError}
-                onApply={applyConnection}
-                onClose={closePanel}
-              />
-            )}
+            <button
+              className="session-seg-btn"
+              onClick={() => setActivePanel('history')}
+              title="Browse and continue past conversations"
+            >
+              <ClockIcon /> History
+            </button>
           </div>
+        </div>
+        <div className="topbar-right">
           <button
             className="speak-toggle"
             onClick={() => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))}
@@ -837,29 +843,6 @@ export function App(): JSX.Element {
             aria-label="Toggle color theme"
           >
             {theme === 'dark' ? '☀️' : '🌙'}
-          </button>
-          <button
-            className={`speak-toggle ${speaking ? 'stop-speaking' : speak ? 'on' : ''}`}
-            onClick={() => (speaking ? stopSpeaking() : void toggleSpeak())}
-            title={speaking ? 'Stop speaking' : speak ? 'Spoken replies on' : 'Spoken replies off'}
-            aria-label={speaking ? 'Stop speaking' : speak ? 'Spoken replies on' : 'Spoken replies off'}
-          >
-            {speaking ? <StopSpeakingIcon /> : speak ? <SpeakerWaveIcon /> : <SpeakerXMarkIcon />}
-          </button>
-          <button
-            className="pantry-toggle"
-            onClick={newSession}
-            disabled={busy}
-            title="Save this chat and start a new one"
-          >
-            ＋ New
-          </button>
-          <button
-            className="pantry-toggle"
-            onClick={() => setActivePanel('history')}
-            title="Browse and continue past conversations"
-          >
-            <ClockIcon /> History
           </button>
           <button
             className="pantry-toggle pantry-toggle-primary"
@@ -952,9 +935,33 @@ export function App(): JSX.Element {
             </div>
           </div>
         ))}
+
+        {stepLimit && (
+          <div className="approval">
+            <div className="approval-head">
+              The agent has run {stepLimit.steps} steps without finishing. Keep going?
+            </div>
+            <div className="approval-actions">
+              <button className="ok" onClick={() => decideContinue(true)}>
+                Continue
+              </button>
+              <button className="deny" onClick={() => decideContinue(false)}>
+                Stop
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
-      <div className="composer">
+      {plan && plan.length > 0 && (
+        <PlanBar
+          steps={plan}
+          expanded={planExpanded}
+          onToggle={() => setPlanExpanded((v) => !v)}
+        />
+      )}
+
+      <div className={`composer ${busy || transcribing ? 'working' : ''}`}>
         <textarea
           value={input}
           placeholder={
@@ -1054,13 +1061,51 @@ export function App(): JSX.Element {
             )}
           </div>
         )}
-        <button
-          className="statusbar-btn"
-          onClick={() => setActivePanel('models')}
-          title="Choose the model the agent runs on"
-        >
-          <CpuChipIcon /> Models
-        </button>
+        <div className="statusbar-right">
+          <div className="context-control statusbar-item server-connection">
+            <button
+              className={`server-status ${serverStatus}`}
+              onClick={() => togglePanel('connection')}
+              title={
+                (serverStatus === 'online'
+                  ? 'Lemonade server is running'
+                  : serverStatus === 'offline'
+                    ? 'Lemonade server is unreachable — start lemond to chat'
+                    : 'Checking Lemonade server…') + '\nClick to configure the connection'
+              }
+            >
+              <span className="server-dot" />
+              {serverStatus === 'online'
+                ? 'Server online'
+                : serverStatus === 'offline'
+                  ? 'Server offline'
+                  : 'Checking…'}
+            </button>
+            {activePanel === 'connection' && (
+              <ConnectionEditor
+                busy={connectionBusy}
+                error={connectionError}
+                onApply={applyConnection}
+                onClose={closePanel}
+              />
+            )}
+          </div>
+          <button
+            className="statusbar-btn"
+            onClick={() => setActivePanel('models')}
+            title="Choose the model the agent runs on"
+          >
+            <CpuChipIcon /> Models
+          </button>
+          <button
+            className={`speak-toggle ${speaking ? 'stop-speaking' : speak ? 'on' : ''}`}
+            onClick={() => (speaking ? stopSpeaking() : void toggleSpeak())}
+            title={speaking ? 'Stop speaking' : speak ? 'Spoken replies on' : 'Spoken replies off'}
+            aria-label={speaking ? 'Stop speaking' : speak ? 'Spoken replies on' : 'Spoken replies off'}
+          >
+            {speaking ? <StopSpeakingIcon /> : speak ? <SpeakerWaveIcon /> : <SpeakerXMarkIcon />}
+          </button>
+        </div>
       </footer>
 
       {activePanel === 'pantry' && (
@@ -1656,6 +1701,75 @@ function ModelCard({
           {busy ? 'Loading…' : model.active ? 'Active' : model.loaded ? 'Use' : 'Load'}
         </button>
       </div>
+    </div>
+  )
+}
+
+// The sticky plan bar shown above the composer while the agent has an active
+// plan. Collapsed, it summarizes the current step and overall progress (e.g.
+// "Creating README.md… (2/4)"); expanded, it reveals the full checklist. Driven
+// by the update_plan tool's plan_updated events.
+function PlanBar({
+  steps,
+  expanded,
+  onToggle
+}: {
+  steps: PlanStep[]
+  expanded: boolean
+  onToggle: () => void
+}): JSX.Element {
+  const total = steps.length
+  const done = steps.filter((s) => s.status === 'completed').length
+  const allDone = done === total
+
+  // The step to summarize when collapsed: the one in progress, else the first
+  // not-yet-done step, else the last (everything complete).
+  const activeIdx = (() => {
+    const ip = steps.findIndex((s) => s.status === 'in-progress')
+    if (ip !== -1) return ip
+    const pending = steps.findIndex((s) => s.status !== 'completed')
+    return pending !== -1 ? pending : total - 1
+  })()
+  const active = steps[activeIdx]
+  const inProgress = active?.status === 'in-progress'
+
+  const summary = allDone
+    ? 'Plan complete'
+    : `${active?.title ?? 'Working'}${inProgress ? '…' : ''}`
+  // Position shown as (current/total): the active step's place in the list, or
+  // total/total once everything is finished.
+  const position = allDone ? total : activeIdx + 1
+  const fillPct = total > 0 ? Math.round((done / total) * 100) : 0
+
+  return (
+    <div className={`plan-bar ${expanded ? 'open' : ''} ${allDone ? 'complete' : ''}`}>
+      <button
+        className="plan-bar-head"
+        onClick={onToggle}
+        aria-expanded={expanded}
+        title={expanded ? 'Collapse plan' : 'Expand plan'}
+      >
+        <span className="plan-bar-caret" aria-hidden="true">
+          ▸
+        </span>
+        <span className="plan-bar-summary">{summary}</span>
+        <span className="plan-bar-count">
+          ({position}/{total})
+        </span>
+        <span className="plan-bar-progress" aria-hidden="true">
+          <span className="plan-bar-fill" style={{ width: `${fillPct}%` }} />
+        </span>
+      </button>
+      {expanded && (
+        <ul className="plan-list plan-bar-list">
+          {steps.map((step, i) => (
+            <li key={i} className={`plan-step ${step.status}`}>
+              <span className="plan-mark" aria-hidden="true" />
+              <span className="plan-step-text">{step.title}</span>
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   )
 }

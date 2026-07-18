@@ -218,6 +218,10 @@ export type AgentEvent =
   // The model created or revised its working plan via the built-in `update_plan`
   // tool. `steps` is the full, current checklist the renderer should display.
   | { type: 'plan_updated'; steps: PlanStep[] }
+  // The agent used up its step budget without finishing. Main is blocked
+  // awaiting the user's choice; the renderer must call respondStepLimit(id, ...)
+  // to either grant another budget or stop.
+  | { type: 'step_limit_request'; id: string; steps: number }
   // Main is blocked awaiting a decision; renderer must call respondApproval(id, ...).
   | { type: 'tool_approval_request'; id: string; server: string; tool: string; args: unknown }
   // Synthesized speech for an assistant turn (base64-encoded audio bytes).
@@ -252,6 +256,9 @@ export interface RendererApi {
   onAgentEvent(handler: (event: AgentEvent) => void): () => void
   /** Answer a pending `tool_approval_request`. */
   respondApproval(id: string, decision: ApprovalDecision): void
+  /** Answer a pending `step_limit_request`: true to let the agent keep going
+   * for another budget, false to stop it. */
+  respondStepLimit(id: string, cont: boolean): void
   /** Toggle spoken replies (TTS). Returns the effective state. */
   setSpeak(enabled: boolean): Promise<boolean>
   /** Current spoken-reply state, seeded from config at startup. */

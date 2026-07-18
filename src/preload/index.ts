@@ -40,6 +40,10 @@ const api: RendererApi = {
     ipcRenderer.send('agent:approve', id, decision)
   },
 
+  respondStepLimit(id: string, cont: boolean): void {
+    ipcRenderer.send('agent:continue', id, cont)
+  },
+
   setSpeak(enabled: boolean): Promise<boolean> {
     return ipcRenderer.invoke('agent:set-speak', enabled)
   },

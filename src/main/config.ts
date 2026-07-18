@@ -22,13 +22,6 @@ function loadDotEnv(cwd: string): void {
   }
 }
 
-// Clamp a possibly-bad numeric env value into the 0..1 range, falling back to a
-// default when it isn't a finite number.
-function clampFraction(value: number, fallback: number): number {
-  if (!Number.isFinite(value)) return fallback
-  return Math.min(1, Math.max(0, value))
-}
-
 export interface AppConfig {
   lemonadeBaseUrl: string
   lemonadeApiKey: string
@@ -47,9 +40,6 @@ export interface AppConfig {
   systemPrompt: string
   /** Prompt the user before every MCP tool call (default true). */
   requireApproval: boolean
-  /** Fraction (0-1) of the usable context budget at which older messages are
-   * auto-summarized to reclaim room. 0 disables auto-compaction. */
-  compactThreshold: number
   tts: {
     enabled: boolean
     model: string
@@ -78,20 +68,17 @@ export function loadConfig(cwd: string = process.cwd()): AppConfig {
     // No server config -> agent runs chat-only with no external tools.
   }
 
-  // Values the user sets in the app's UI (model, server connection) are
-  // remembered across restarts in settings.json. A UI choice is explicit, so it
-  // takes priority over the matching env var — which acts only as the *initial*
-  // default before the user has ever chosen one. Precedence for each:
-  // saved choice, then env default, then the built-in default.
-  const saved = readSettings(cwd)
+  // The active model is remembered across restarts in settings.json. The model
+  // the user picks in the app's UI is an explicit choice, so it takes priority
+  // over LEMONADE_MODEL — which acts only as the *initial* default before the
+  // user has ever chosen one. Precedence: saved choice, then env default, then
+  // the built-in default.
+  const savedModel = readSettings(cwd).model
 
   return {
-    // 13305 is Lemonade Server's default port (its OpenAI-compatible routes live
-    // under /api/v1). Configurable in-app via the server-status menu, or by env.
-    lemonadeBaseUrl:
-      saved.baseUrl ?? process.env.LEMONADE_BASE_URL ?? 'http://localhost:13305/api/v1',
-    lemonadeApiKey: saved.apiKey ?? process.env.LEMONADE_API_KEY ?? '',
-    model: saved.model ?? process.env.LEMONADE_MODEL ?? 'Qwen3-1.7B-GGUF',
+    lemonadeBaseUrl: process.env.LEMONADE_BASE_URL ?? 'http://localhost:8000/api/v1',
+    lemonadeApiKey: process.env.LEMONADE_API_KEY ?? '',
+    model: savedModel ?? process.env.LEMONADE_MODEL ?? 'Qwen3-1.7B-GGUF',
     maxSteps: Number(process.env.AGENT_MAX_STEPS ?? '8'),
     contextSize: process.env.LEMONADE_CONTEXT_SIZE
       ? Number(process.env.LEMONADE_CONTEXT_SIZE)
@@ -99,12 +86,8 @@ export function loadConfig(cwd: string = process.cwd()): AppConfig {
     completionReserve: Number(process.env.LEMONADE_COMPLETION_RESERVE ?? '512'),
     systemPrompt: process.env.AGENT_SYSTEM_PROMPT ?? DEFAULT_SYSTEM_PROMPT,
     requireApproval: (process.env.AGENT_REQUIRE_APPROVAL ?? 'true') !== 'false',
-    compactThreshold: clampFraction(
-      Number(process.env.AGENT_COMPACT_THRESHOLD ?? '0.75'),
-      0.75
-    ),
     tts: {
-      enabled: saved.speak ?? (process.env.LEMONADE_TTS_ENABLED ?? 'false') === 'true',
+      enabled: (process.env.LEMONADE_TTS_ENABLED ?? 'false') === 'true',
       model: process.env.LEMONADE_TTS_MODEL ?? 'kokoro-v1',
       voice: process.env.LEMONADE_TTS_VOICE ?? 'af_sky',
       format: process.env.LEMONADE_TTS_FORMAT ?? 'mp3'
@@ -125,10 +108,7 @@ const DEFAULT_SYSTEM_PROMPT =
   'query a database, run a command \u2014 you MUST call the appropriate tool to actually do it. ' +
   'Never print code, file contents, or step-by-step instructions for the user to run themselves ' +
   'when a tool can perform the action directly. Only reply in plain text when no tool fits, or to ' +
-  'briefly report results after your tool calls have completed. ' +
-  'For a task that takes several steps or tool calls, first call the update_plan tool to lay out ' +
-  'a short todo list, then call it again as you go to mark steps in-progress and completed. ' +
-  'Skip planning for simple, one-step requests.'
+  'briefly report results after your tool calls have completed.'
 
 const SERVERS_FILE = 'config/servers.json'
 const CATALOG_FILE = 'config/catalog.json'
@@ -139,13 +119,6 @@ const SETTINGS_FILE = 'config/settings.json'
 export interface AppSettings {
   /** The model the user last loaded as the agent's chat model, if any. */
   model?: string
-  /** Base URL of the Lemonade server the user configured in-app, if any.
-   * Includes the OpenAI-compatible prefix, e.g. `http://localhost:13305/api/v1`. */
-  baseUrl?: string
-  /** API key the user configured in-app, if the server requires one. */
-  apiKey?: string
-  /** Whether spoken replies (TTS) were last left on or off by the user. */
-  speak?: boolean
 }
 
 /** Read persisted UI/app settings. Missing or malformed file -> empty. */

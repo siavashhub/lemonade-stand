@@ -109,6 +109,10 @@ body {
   align-items: center;
   gap: 8px;
   font-weight: 600;
+  /* Give the two side sections equal weight so the center group stays truly
+     centered regardless of how wide each side is. */
+  flex: 1 1 0;
+  min-width: 0;
 }
 
 .brand-logo {
@@ -118,10 +122,74 @@ body {
   display: block;
 }
 
+/* The center cluster holds the primary session actions (New Session, History)
+   pinned to the middle of the top bar. */
+.topbar-center {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 0 0 auto;
+}
+
+/* Segmented control: New Session + History fused into one rounded pill so the
+   two related session actions read as a single unit. New Session is the primary
+   (amber-tinted) half; History is the secondary neighbour. */
+.session-seg {
+  display: inline-flex;
+  align-items: stretch;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  overflow: hidden;
+  background: var(--bg);
+  -webkit-app-region: no-drag;
+}
+
+.session-seg-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  padding: 7px 16px;
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.session-seg-btn svg {
+  font-size: 15px;
+}
+
+.session-seg-btn + .session-seg-btn {
+  border-left: 1px solid var(--border);
+}
+
+.session-seg-btn:hover:not(:disabled) {
+  background: rgba(127, 127, 127, 0.12);
+}
+
+.session-seg-btn.primary {
+  color: var(--accent);
+}
+
+.session-seg-btn.primary:hover:not(:disabled) {
+  background: rgba(245, 197, 66, 0.12);
+}
+
+.session-seg-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 .topbar-right {
   display: flex;
   align-items: center;
   gap: 12px;
+  flex: 1 1 0;
+  justify-content: flex-end;
 }
 
 .window-controls {
@@ -606,11 +674,19 @@ body {
   display: inline-flex;
 }
 
+/* Lower-traffic status/config controls (server connection, model picker, voice
+   toggle), grouped and pushed to the right edge of the footer. */
+.statusbar-right {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  margin-left: auto;
+}
+
 .statusbar-btn {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  margin-left: auto;
   border: 1px solid var(--border);
   background: transparent;
   color: var(--muted);
@@ -631,8 +707,15 @@ body {
   border-color: var(--accent);
 }
 
-/* Popovers hosted in the footer must open upward and toward the right so they
-   never spill past the bottom or left edges of the window. */
+/* The footer speaker toggle is smaller than the top-bar variant to sit neatly
+   inline with the text-sized status controls around it. */
+.statusbar-right .speak-toggle {
+  font-size: 14px;
+  padding: 3px 7px;
+}
+
+/* Popovers hosted in the footer must open upward so they never spill past the
+   bottom edge. Left-hand items (context, usage) expand rightward. */
 .statusbar .context-editor,
 .statusbar .context-usage-pop {
   top: auto;
@@ -641,11 +724,12 @@ body {
   left: 0;
 }
 
-/* The server-status pill sits on the left of the top-bar cluster, so its
-   connection popover opens rightward to stay inside the window frame. */
-.server-connection .context-editor {
-  right: auto;
-  left: 0;
+/* The server-status pill now lives in the footer's right-aligned cluster, so
+   its connection popover opens upward AND leftward (anchored to the button's
+   right edge) to stay clear of the window's right edge. */
+.statusbar-right .server-connection .context-editor {
+  right: 0;
+  left: auto;
 }
 
 .transcript {
@@ -846,6 +930,88 @@ body {
   color: var(--muted);
 }
 
+/* Sticky plan bar, docked just above the composer. Collapsed it shows the
+   current step + progress; clicking expands it into the full checklist. */
+.plan-bar {
+  flex: 0 0 auto;
+  margin: 0 12px;
+  background: var(--accent-soft);
+  border: 1px solid var(--border);
+  border-left: 2px solid var(--accent);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.plan-bar-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 12px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  color: var(--text);
+  font-size: 13px;
+}
+
+.plan-bar-head:hover {
+  background: var(--accent-soft);
+}
+
+.plan-bar-caret {
+  flex: 0 0 auto;
+  color: var(--accent);
+  font-size: 11px;
+  transition: transform 0.15s ease;
+}
+
+.plan-bar.open .plan-bar-caret {
+  transform: rotate(90deg);
+}
+
+.plan-bar-summary {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+
+.plan-bar.complete .plan-bar-summary {
+  color: var(--accent);
+}
+
+.plan-bar-count {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+}
+
+.plan-bar-progress {
+  flex: 0 0 64px;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--border);
+  overflow: hidden;
+}
+
+.plan-bar-fill {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  border-radius: 999px;
+  transition: width 0.25s ease;
+}
+
+.plan-bar-list {
+  margin: 0;
+  padding: 4px 12px 12px;
+  border-top: 1px solid var(--border);
+}
+
 /* "Agent is working" indicator shown while a turn is in flight. Cycles the
    playful phrases from config/phrases.json. */
 .thinking {
@@ -980,6 +1146,41 @@ body {
   padding: 12px 16px;
   border-top: 1px solid var(--border);
   background: var(--panel);
+}
+
+/* While the agent is working (or audio is transcribing) a thin accent beam
+   sweeps across the top edge of the composer. Subtle and never shifts layout. */
+.composer.working {
+  position: relative;
+}
+
+.composer.working::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    var(--accent) 40%,
+    var(--accent) 60%,
+    transparent
+  );
+  background-size: 40% 100%;
+  background-repeat: no-repeat;
+  animation: composer-sweep 1.4s ease-in-out infinite;
+  pointer-events: none;
+}
+
+@keyframes composer-sweep {
+  0% {
+    background-position: -40% 0;
+  }
+  100% {
+    background-position: 140% 0;
+  }
 }
 
 .composer textarea {
