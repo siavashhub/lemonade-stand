@@ -18,6 +18,7 @@ import {
 import { LemonadeClient } from './lemonade/client'
 import { McpManager } from './mcp/manager'
 import { Agent, type ApproveFn, type ContinueFn } from './agent/loop'
+import { initFileLogging } from './logger'
 import {
   clearSessions,
   deleteSession,
@@ -452,6 +453,12 @@ ipcMain.on('agent:cancel', () => currentAgentAbort?.abort())
 // --- Lifecycle ---------------------------------------------------------------
 
 app.whenReady().then(async () => {
+  // Turn on file logging first (when LOG_LEVEL=debug or settings.json's
+  // "logLevel":"debug"), so MCP connection traces and errors below are captured
+  // to a shareable log file. Best-effort; a non-writable path just skips it.
+  const logFile = initFileLogging(app.getPath('logs'), config.debug, `v${app.getVersion()}`)
+  if (logFile) console.log(`[logger] file logging enabled -> ${logFile}`)
+
   // Give Windows a stable app identity so the taskbar uses our icon and groups
   // windows under one entry.
   if (process.platform === 'win32') app.setAppUserModelId('com.lemonade.stand')

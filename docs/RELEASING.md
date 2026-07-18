@@ -105,6 +105,8 @@ git tag v0.2.0
 git push origin v0.2.0
 ```
 
+If you needed to update a tag, you have to delete it first with git tag -d <tag_name> and git push origin --delete <tag_name> for example
+
 ### 5. The pipeline takes over
 
 Pushing the `v*` tag triggers [`.github/workflows/release.yml`](../.github/workflows/release.yml):

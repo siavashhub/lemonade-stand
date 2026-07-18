@@ -132,6 +132,9 @@ body {
      centered regardless of how wide each side is. */
   flex: 1 1 0;
   min-width: 0;
+  /* Opt out of the drag region so the native title tooltip (app version) shows
+     on hover — Chromium suppresses tooltips over -webkit-app-region: drag. */
+  -webkit-app-region: no-drag;
 }
 
 .brand-logo {

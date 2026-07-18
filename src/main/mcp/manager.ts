@@ -12,6 +12,16 @@ function sanitize(name: string): string {
   return name.replace(/[^a-zA-Z0-9_-]/g, '_')
 }
 
+// Drop `undefined` values from a process env so it satisfies the stdio
+// transport's Record<string, string> shape while preserving PATH and friends.
+function cleanEnv(env: NodeJS.ProcessEnv): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const [k, v] of Object.entries(env)) {
+    if (typeof v === 'string') out[k] = v
+  }
+  return out
+}
+
 interface Connected {
   id: string
   client: Client
@@ -54,7 +64,12 @@ export class McpManager {
       const transport = new StdioClientTransport({
         command: server.command,
         args: server.args ?? [],
-        env: server.env
+        // Inherit the app's environment (notably PATH) so the launcher — npx,
+        // node, uvx, etc. — resolves when the app is started from the OS shell
+        // rather than a terminal. The MCP SDK otherwise spawns with a stripped
+        // default env, which is why stdio servers connect in `npm run dev` but
+        // silently fail in a packaged build. Config `env` overrides still win.
+        env: { ...cleanEnv(process.env), ...server.env }
       })
       await client.connect(transport)
     } else {
