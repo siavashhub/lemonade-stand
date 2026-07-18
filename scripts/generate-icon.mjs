@@ -12,9 +12,11 @@ const svgPath = join(resources, 'icon.svg')
 
 const svg = await readFile(svgPath)
 
-// Main window icon (Electron accepts PNG on Windows/Linux).
-const png256 = await sharp(svg, { density: 384 }).resize(256, 256).png().toBuffer()
-await writeFile(join(resources, 'icon.png'), png256)
+// Main window / packaged app icon. 512×512 is the minimum macOS requires to
+// generate its .icns during packaging; Windows (.ico below) and Linux use it
+// directly. Electron accepts PNG on Windows/Linux.
+const png512 = await sharp(svg, { density: 512 }).resize(512, 512).png().toBuffer()
+await writeFile(join(resources, 'icon.png'), png512)
 
 // Multi-size .ico for crisp taskbar / packaged-exe rendering.
 const icoSizes = [16, 24, 32, 48, 64, 128, 256]
