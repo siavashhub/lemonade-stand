@@ -266,6 +266,7 @@ ipcMain.handle('history:suggest-title', async (_event, messages: ChatMessage[]) 
 ipcMain.handle('agent:get-speak', () => speakEnabled)
 ipcMain.handle('agent:set-speak', (_event, enabled: boolean) => {
   speakEnabled = Boolean(enabled)
+  writeSettings(appPath, { speak: speakEnabled })
   return speakEnabled
 })
 
