@@ -27,6 +27,23 @@ export type ContinueFn = (steps: number) => Promise<boolean>
 // without doing any real work, stop rather than spin forever on plan edits.
 const MAX_PLAN_ONLY_STREAK = 8
 
+// Once a task has done this many real-work turns without ever planning, force a
+// single planning round-trip (Option B). Kept at 1 so the plan appears early —
+// as soon as the model takes a second action without a plan — while a task that
+// finishes in a single tool call stays plan-free.
+const FORCE_PLAN_AFTER = 1
+
+// The nudge injected to force that planning round-trip.
+const FORCE_PLAN_NUDGE =
+  'You are working through a multi-step task but have not laid out a plan yet. ' +
+  'Before taking any more actions, call the update_plan tool to list the steps ' +
+  'as a short todo list. Then continue with the work.'
+
+// If the model tries to stop while its plan still has unfinished steps (e.g.
+// after a mid-task compaction confused it), nudge it to keep going. Bounded so
+// a model that genuinely can't finish isn't looped forever.
+const MAX_PLAN_FINISH_NUDGES = 3
+
 // Name of the built-in planning tool. It is not backed by an MCP server: the
 // loop synthesizes it, handles its calls internally, and surfaces the plan to
 // the UI. Kept flat (no `__` namespace) so it can't collide with a server tool.
@@ -88,7 +105,7 @@ export class Agent {
     private systemPrompt: string,
     /** Fraction (0-1) of the usable context budget at which older messages are
      * summarized to free room. 0 disables auto-compaction. */
-    private compactThreshold = 0.75
+    private compactThreshold = 0.9
   ) {}
 
   async run(
@@ -115,6 +132,14 @@ export class Agent {
       let step = 0
       let limit = this.maxSteps
       let planOnlyStreak = 0
+      // Whether the model has produced a plan this turn, and whether we've
+      // already forced one — so the Option-B nudge fires at most once.
+      let hasPlanned = false
+      let forcedPlan = false
+      // The latest plan the model set, and how many times we've nudged it to
+      // finish unfinished steps, so a premature stop can be caught and resumed.
+      let currentPlan: PlanStep[] = []
+      let finishNudges = 0
       for (;;) {
         // The user asked to halt: stop before starting more work.
         if (signal?.aborted) {
@@ -123,8 +148,9 @@ export class Agent {
         }
         // Keep long conversations inside the context window by summarizing the
         // older messages before they overflow. Runs each iteration so a turn
-        // that balloons via tool output is also caught.
-        await this.maybeCompact(messages, tools, emit, signal)
+        // that balloons via tool output is also caught. The current plan is
+        // pinned so it survives compaction intact.
+        await this.maybeCompact(messages, tools, emit, signal, currentPlan)
         // Pre-flight: compare the request against the model's context window so
         // we can warn the user (or block) instead of letting the server reject
         // an over-long prompt with an opaque error.
@@ -160,26 +186,62 @@ export class Agent {
 
         const choice = await this.lemonade.chat(messages, tools, signal)
         const message = choice.message
-
-        // Record the assistant turn verbatim so tool results can reference its
-        // tool_call ids on the next iteration.
-        messages.push(message as ChatCompletionMessageParam)
-
         const toolCalls = message.tool_calls ?? []
+
+        // Final answer (no tool calls). If the model is trying to stop while its
+        // plan still has unfinished steps (often after a mid-task compaction
+        // muddled its state), nudge it to keep going instead of ending.
         if (toolCalls.length === 0) {
+          const unfinished = currentPlan.filter((s) => s.status !== 'completed')
+          if (unfinished.length > 0 && finishNudges < MAX_PLAN_FINISH_NUDGES) {
+            finishNudges++
+            messages.push({
+              role: 'user',
+              content:
+                `Your plan still has unfinished steps: ${unfinished
+                  .map((s) => s.title)
+                  .join('; ')}. Keep working — actually perform each remaining step ` +
+                `with the appropriate tool, updating the plan as you complete them, ` +
+                `and only give your final summary once every step is done.`
+            })
+            continue
+          }
+          messages.push(message as ChatCompletionMessageParam)
           emit({ type: 'assistant_text', text: message.content ?? '' })
           emit({ type: 'done' })
           return
         }
 
+        const wantsRealWork = toolCalls.some(
+          (c) => c.type === 'function' && c.function.name !== PLAN_TOOL
+        )
+
+        // Option B: the task is clearly multi-step (already did FORCE_PLAN_AFTER
+        // real-work turns) but the model still hasn't planned. Drop this
+        // un-planned work turn — we never pushed it, so there are no orphaned
+        // tool_calls — and re-ask with a nudge so the model plans first.
+        if (wantsRealWork && !hasPlanned && !forcedPlan && step >= FORCE_PLAN_AFTER) {
+          forcedPlan = true
+          messages.push({ role: 'user', content: FORCE_PLAN_NUDGE })
+          continue
+        }
+
+        // Record the assistant turn verbatim so tool results can reference its
+        // tool_call ids on the next iteration.
+        messages.push(message as ChatCompletionMessageParam)
+
         // Execute every requested call. A turn "did real work" if it invoked at
         // least one non-planning tool; a plan-only turn stays free.
         let didRealWork = false
         for (const call of toolCalls) {
-          if (call.type === 'function' && call.function.name !== PLAN_TOOL) {
+          if (call.type === 'function' && call.function.name === PLAN_TOOL) {
+            hasPlanned = true
+          } else {
             didRealWork = true
           }
-          await this.executeCall(call, messages, emit, approve)
+          const planned = await this.executeCall(call, messages, emit, approve)
+          // Track the latest plan so a premature stop can be detected against it.
+          if (planned) currentPlan = planned
         }
 
         if (didRealWork) {
@@ -233,6 +295,12 @@ export class Agent {
   // can recognize, fold, and replace it instead of stacking summaries.
   private static readonly SUMMARY_PREFIX = 'Summary of the conversation so far:'
 
+  // Prefix marking the pinned-plan system message. Kept out of the summary so
+  // the plan (with live progress) survives every compaction verbatim and the
+  // model never loses track of what's left to do. Re-generated from the current
+  // plan on each compaction, replacing any prior pin.
+  private static readonly PLAN_PREFIX = 'Current plan (not finished until every step is checked):'
+
   /**
    * Summarize older messages when the request approaches the context budget, so
    * a long conversation can keep going instead of hitting a hard overflow.
@@ -248,12 +316,13 @@ export class Agent {
     messages: ChatCompletionMessageParam[],
     tools: ChatCompletionTool[],
     emit: (event: AgentEvent) => void,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    plan?: PlanStep[]
   ): Promise<void> {
     if (this.compactThreshold <= 0) return
     const budget = await this.lemonade.checkBudget(messages, tools)
     if (budget.estimatedTokens <= budget.budget * this.compactThreshold) return
-    if (await this.compactMessages(messages, signal)) {
+    if (await this.compactMessages(messages, signal, plan)) {
       emit({ type: 'history_compacted', messages: messages as ChatMessage[] })
     }
   }
@@ -282,9 +351,11 @@ export class Agent {
    */
   private async compactMessages(
     messages: ChatCompletionMessageParam[],
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    plan?: PlanStep[]
   ): Promise<boolean> {
-    // Preserve leading system messages; pull out any prior summary to fold in.
+    // Preserve leading system messages; pull out any prior summary to fold in,
+    // and drop any prior plan pin (a fresh one is re-added from `plan` below).
     let sysEnd = 0
     while (sysEnd < messages.length && messages[sysEnd].role === 'system') sysEnd++
     const prefix: ChatCompletionMessageParam[] = []
@@ -294,6 +365,8 @@ export class Agent {
       const content = typeof m.content === 'string' ? m.content : ''
       if (content.startsWith(Agent.SUMMARY_PREFIX)) {
         priorSummary = content.slice(Agent.SUMMARY_PREFIX.length).trim()
+      } else if (content.startsWith(Agent.PLAN_PREFIX)) {
+        // Drop stale pin; the live plan is re-pinned after summarizing.
       } else {
         prefix.push(m)
       }
@@ -316,12 +389,27 @@ export class Agent {
     }
     if (!summary) return false
 
-    // Rebuild in place: [system prefix, folded summary, recent tail].
+    // Rebuild in place: [system prefix, folded summary, pinned plan, recent tail].
     messages.length = 0
     messages.push(...prefix)
     messages.push({ role: 'system', content: `${Agent.SUMMARY_PREFIX}\n${summary}` })
+    const pin = this.renderPlanPin(plan)
+    if (pin) messages.push({ role: 'system', content: pin })
     messages.push(...tail)
     return true
+  }
+
+  /**
+   * Render the current plan as a compact checklist to pin into context after a
+   * compaction, so the model always sees the remaining work. Returns an empty
+   * string when there's no plan to pin.
+   */
+  private renderPlanPin(plan?: PlanStep[]): string {
+    if (!plan || plan.length === 0) return ''
+    const mark = (s: PlanStep): string =>
+      s.status === 'completed' ? '[x]' : s.status === 'in-progress' ? '[~]' : '[ ]'
+    const lines = plan.map((s) => `${mark(s)} ${s.title}`).join('\n')
+    return `${Agent.PLAN_PREFIX}\n${lines}`
   }
 
   /**
@@ -349,7 +437,7 @@ export class Agent {
     messages: ChatCompletionMessageParam[],
     emit: (event: AgentEvent) => void,
     approve: ApproveFn
-  ): Promise<void> {
+  ): Promise<PlanStep[] | undefined> {
     if (call.type !== 'function') return
     const qualified = call.function.name
 
@@ -374,7 +462,7 @@ export class Agent {
             ? `Plan updated (${steps.length} steps). Continue working through it.`
             : 'Plan cleared.'
       })
-      return
+      return steps
     }
 
     const [serverId, ...rest] = qualified.split('__')

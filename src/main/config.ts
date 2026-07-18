@@ -100,8 +100,8 @@ export function loadConfig(cwd: string = process.cwd()): AppConfig {
     systemPrompt: process.env.AGENT_SYSTEM_PROMPT ?? DEFAULT_SYSTEM_PROMPT,
     requireApproval: (process.env.AGENT_REQUIRE_APPROVAL ?? 'true') !== 'false',
     compactThreshold: clampFraction(
-      Number(process.env.AGENT_COMPACT_THRESHOLD ?? '0.75'),
-      0.75
+      Number(process.env.AGENT_COMPACT_THRESHOLD ?? '0.9'),
+      0.9
     ),
     tts: {
       enabled: saved.speak ?? (process.env.LEMONADE_TTS_ENABLED ?? 'false') === 'true',
