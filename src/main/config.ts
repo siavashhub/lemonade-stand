@@ -22,6 +22,13 @@ function loadDotEnv(cwd: string): void {
   }
 }
 
+// Clamp a possibly-bad numeric env value into the 0..1 range, falling back to a
+// default when it isn't a finite number.
+function clampFraction(value: number, fallback: number): number {
+  if (!Number.isFinite(value)) return fallback
+  return Math.min(1, Math.max(0, value))
+}
+
 export interface AppConfig {
   lemonadeBaseUrl: string
   lemonadeApiKey: string
@@ -40,6 +47,9 @@ export interface AppConfig {
   systemPrompt: string
   /** Prompt the user before every MCP tool call (default true). */
   requireApproval: boolean
+  /** Fraction (0-1) of the usable context budget at which older messages are
+   * auto-summarized to reclaim room. 0 disables auto-compaction. */
+  compactThreshold: number
   tts: {
     enabled: boolean
     model: string
@@ -89,6 +99,10 @@ export function loadConfig(cwd: string = process.cwd()): AppConfig {
     completionReserve: Number(process.env.LEMONADE_COMPLETION_RESERVE ?? '512'),
     systemPrompt: process.env.AGENT_SYSTEM_PROMPT ?? DEFAULT_SYSTEM_PROMPT,
     requireApproval: (process.env.AGENT_REQUIRE_APPROVAL ?? 'true') !== 'false',
+    compactThreshold: clampFraction(
+      Number(process.env.AGENT_COMPACT_THRESHOLD ?? '0.75'),
+      0.75
+    ),
     tts: {
       enabled: (process.env.LEMONADE_TTS_ENABLED ?? 'false') === 'true',
       model: process.env.LEMONADE_TTS_MODEL ?? 'kokoro-v1',

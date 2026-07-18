@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { copyFileSync, existsSync, mkdirSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import type { AgentEvent, ApprovalDecision, ChatMessage, McpServerState } from '@shared/types'
+import type { AgentEvent, ApprovalDecision, ChatMessage, McpServerState, StoredSession } from '@shared/types'
 import {
   loadCatalog,
   loadConfig,
@@ -18,7 +18,14 @@ import {
 import { LemonadeClient } from './lemonade/client'
 import { McpManager } from './mcp/manager'
 import { Agent, type ApproveFn } from './agent/loop'
-
+import {
+  clearSessions,
+  deleteSession,
+  listSessions,
+  readSession,
+  renameSession,
+  writeSession
+} from './history/store'
 const __dirname = fileURLToPath(new URL('.', import.meta.url))
 
 // Resolve the directory that holds the app's `config/` files (catalog, phrases,
@@ -60,7 +67,7 @@ const lemonade = new LemonadeClient(
   config.completionReserve
 )
 const mcp = new McpManager()
-const agent = new Agent(lemonade, mcp, config.maxSteps, config.systemPrompt)
+const agent = new Agent(lemonade, mcp, config.maxSteps, config.systemPrompt, config.compactThreshold)
 
 // --- Session state -----------------------------------------------------------
 
@@ -228,6 +235,34 @@ ipcMain.handle('dialog:pick-path', async (_event, kind: 'folder' | 'file') => {
   return result.canceled || result.filePaths.length === 0 ? null : result.filePaths[0]
 })
 
+// --- Conversation history ----------------------------------------------------
+// Saved sessions live one-file-per-conversation under the writable config dir,
+// so a user can revisit or continue an earlier chat.
+
+ipcMain.handle('history:list', () => listSessions(appPath))
+ipcMain.handle('history:load', (_event, id: string) => readSession(appPath, id))
+ipcMain.handle('history:save', (_event, session: StoredSession) =>
+  writeSession(appPath, session)
+)
+ipcMain.handle('history:delete', (_event, id: string) => deleteSession(appPath, id))
+ipcMain.handle('history:rename', (_event, id: string, title: string) =>
+  renameSession(appPath, id, title)
+)
+ipcMain.handle('history:clear', () => clearSessions(appPath))
+
+// Auto-title a conversation. Best-effort: fall back to a trimmed first user
+// message when the model is slow or offline so saving never blocks on this.
+ipcMain.handle('history:suggest-title', async (_event, messages: ChatMessage[]) => {
+  const firstUser = messages.find((m) => m.role === 'user')
+  const fallback = (firstUser?.content ?? 'New conversation').trim().slice(0, 60)
+  try {
+    const title = await lemonade.generateTitle(messages as never)
+    return title || fallback
+  } catch {
+    return fallback
+  }
+})
+
 ipcMain.handle('agent:get-speak', () => speakEnabled)
 ipcMain.handle('agent:set-speak', (_event, enabled: boolean) => {
   speakEnabled = Boolean(enabled)
@@ -283,6 +318,23 @@ ipcMain.handle(
 
 // Effective context-window budget, surfaced in the UI.
 ipcMain.handle('agent:context-info', () => lemonade.getContextInfo())
+
+// Per-category breakdown of how the current conversation fills the context
+// window, for the live usage indicator. The tool catalogue and system prompt
+// live in main, so the split is computed here from the renderer's history.
+ipcMain.handle('agent:context-breakdown', (_event, messages: ChatMessage[]) =>
+  lemonade.contextBreakdown(
+    messages as never,
+    mcp.getOpenAiTools(),
+    config.systemPrompt
+  )
+)
+
+// Manual "Compact Conversation" button: summarize older messages on demand and
+// return the compacted history (or null when nothing was safe to fold).
+ipcMain.handle('agent:compact', (_event, messages: ChatMessage[]) =>
+  agent.compact(messages)
+)
 
 // Reload the chat model with a new runtime context size (server /load).
 ipcMain.handle('agent:set-context', (_event, ctxSize: number) =>

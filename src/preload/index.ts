@@ -76,6 +76,14 @@ const api: RendererApi = {
     return ipcRenderer.invoke('agent:context-info')
   },
 
+  getContextBreakdown(history: ChatMessage[]) {
+    return ipcRenderer.invoke('agent:context-breakdown', history)
+  },
+
+  compactHistory(history: ChatMessage[]) {
+    return ipcRenderer.invoke('agent:compact', history)
+  },
+
   setContextSize(ctxSize: number) {
     return ipcRenderer.invoke('agent:set-context', ctxSize)
   },
@@ -106,6 +114,34 @@ const api: RendererApi = {
 
   pickPath(kind: 'folder' | 'file') {
     return ipcRenderer.invoke('dialog:pick-path', kind)
+  },
+
+  listSessions() {
+    return ipcRenderer.invoke('history:list')
+  },
+
+  loadSession(id: string) {
+    return ipcRenderer.invoke('history:load', id)
+  },
+
+  saveSession(session) {
+    return ipcRenderer.invoke('history:save', session)
+  },
+
+  deleteSession(id: string) {
+    return ipcRenderer.invoke('history:delete', id)
+  },
+
+  renameSession(id: string, title: string) {
+    return ipcRenderer.invoke('history:rename', id, title)
+  },
+
+  clearSessions() {
+    return ipcRenderer.invoke('history:clear')
+  },
+
+  suggestTitle(history: ChatMessage[]) {
+    return ipcRenderer.invoke('history:suggest-title', history)
   },
 
   minimizeWindow(): void {

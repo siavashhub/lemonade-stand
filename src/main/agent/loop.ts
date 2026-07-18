@@ -1,6 +1,7 @@
 import type {
   ChatCompletionMessageParam,
-  ChatCompletionMessageToolCall
+  ChatCompletionMessageToolCall,
+  ChatCompletionTool
 } from 'openai/resources/chat/completions'
 import type { AgentEvent, ChatMessage } from '@shared/types'
 import type { LemonadeClient } from '../lemonade/client'
@@ -28,7 +29,10 @@ export class Agent {
     private lemonade: LemonadeClient,
     private mcp: McpManager,
     private maxSteps: number,
-    private systemPrompt: string
+    private systemPrompt: string,
+    /** Fraction (0-1) of the usable context budget at which older messages are
+     * summarized to free room. 0 disables auto-compaction. */
+    private compactThreshold = 0.75
   ) {}
 
   async run(
@@ -53,6 +57,10 @@ export class Agent {
           emit({ type: 'done' })
           return
         }
+        // Keep long conversations inside the context window by summarizing the
+        // older messages before they overflow. Runs each iteration so a turn
+        // that balloons via tool output is also caught.
+        await this.maybeCompact(messages, tools, emit, signal)
         // Pre-flight: compare the request against the model's context window so
         // we can warn the user (or block) instead of letting the server reject
         // an over-long prompt with an opaque error.
@@ -120,6 +128,101 @@ export class Agent {
       emit({ type: 'error', message: err instanceof Error ? err.message : String(err) })
       emit({ type: 'done' })
     }
+  }
+
+  // Prefix marking the injected summary system message so a later compaction
+  // can recognize, fold, and replace it instead of stacking summaries.
+  private static readonly SUMMARY_PREFIX = 'Summary of the conversation so far:'
+
+  /**
+   * Summarize older messages when the request approaches the context budget, so
+   * a long conversation can keep going instead of hitting a hard overflow.
+   *
+   * Safety rules that must hold for lemond to accept the result:
+   *  - the leading system prompt is always preserved;
+   *  - the kept "tail" always begins at a `user` message, so we never split an
+   *    assistant `tool_calls` message from its matching `tool` results.
+   * When no clean boundary exists yet, it does nothing and lets the pre-flight
+   * budget check warn/block as before.
+   */
+  private async maybeCompact(
+    messages: ChatCompletionMessageParam[],
+    tools: ChatCompletionTool[],
+    emit: (event: AgentEvent) => void,
+    signal?: AbortSignal
+  ): Promise<void> {
+    if (this.compactThreshold <= 0) return
+    const budget = await this.lemonade.checkBudget(messages, tools)
+    if (budget.estimatedTokens <= budget.budget * this.compactThreshold) return
+    if (await this.compactMessages(messages, signal)) {
+      emit({ type: 'history_compacted', messages: messages as ChatMessage[] })
+    }
+  }
+
+  /**
+   * Force a compaction pass regardless of the budget threshold, for the UI's
+   * manual "Compact Conversation" button. Returns the new model-facing history
+   * when it summarized, or null when there was nothing safe to fold (so the
+   * caller can leave the conversation untouched).
+   */
+  async compact(history: ChatMessage[], signal?: AbortSignal): Promise<ChatMessage[] | null> {
+    const messages = history.slice() as ChatCompletionMessageParam[]
+    const changed = await this.compactMessages(messages, signal)
+    return changed ? (messages as ChatMessage[]) : null
+  }
+
+  /**
+   * Core summarize-and-keep-tail compaction, mutating `messages` in place.
+   * Returns true when it replaced older messages with a summary, false when no
+   * clean boundary existed or summarization produced nothing.
+   *
+   * Safety rules that must hold for lemond to accept the result:
+   *  - leading system messages are always preserved;
+   *  - the kept "tail" always begins at a `user` message, so an assistant
+   *    `tool_calls` message is never split from its matching `tool` results.
+   */
+  private async compactMessages(
+    messages: ChatCompletionMessageParam[],
+    signal?: AbortSignal
+  ): Promise<boolean> {
+    // Preserve leading system messages; pull out any prior summary to fold in.
+    let sysEnd = 0
+    while (sysEnd < messages.length && messages[sysEnd].role === 'system') sysEnd++
+    const prefix: ChatCompletionMessageParam[] = []
+    let priorSummary = ''
+    for (let i = 0; i < sysEnd; i++) {
+      const m = messages[i]
+      const content = typeof m.content === 'string' ? m.content : ''
+      if (content.startsWith(Agent.SUMMARY_PREFIX)) {
+        priorSummary = content.slice(Agent.SUMMARY_PREFIX.length).trim()
+      } else {
+        prefix.push(m)
+      }
+    }
+
+    // Keep the most recent turns verbatim; find a clean `user` boundary at or
+    // after the desired tail start so tool sequences stay intact.
+    const KEEP_TAIL = 6
+    let cut = Math.max(sysEnd, messages.length - KEEP_TAIL)
+    while (cut < messages.length && messages[cut].role !== 'user') cut++
+    const head = messages.slice(sysEnd, cut)
+    if (cut >= messages.length || head.length === 0) return false // nothing safe to fold
+
+    const tail = messages.slice(cut)
+    let summary: string
+    try {
+      summary = await this.lemonade.summarize(head, priorSummary, signal)
+    } catch {
+      return false // summarization failed; leave history untouched
+    }
+    if (!summary) return false
+
+    // Rebuild in place: [system prefix, folded summary, recent tail].
+    messages.length = 0
+    messages.push(...prefix)
+    messages.push({ role: 'system', content: `${Agent.SUMMARY_PREFIX}\n${summary}` })
+    messages.push(...tail)
+    return true
   }
 
   private async executeCall(

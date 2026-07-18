@@ -6,27 +6,28 @@ import type {
   ApprovalDecision,
   CatalogEntry,
   ChatMessage,
+  ContextBreakdown,
   ContextInfo,
   McpServerState,
-  ModelInfo
+  ModelInfo,
+  SessionSummary,
+  TranscriptEntry
 } from '@shared/types'
 import {
   ArchiveBoxIcon,
+  ClockIcon,
   CpuChipIcon,
   MicrophoneIcon,
   SpeakerWaveIcon,
   SpeakerXMarkIcon,
-  StopIcon
+  StopIcon,
+  TrashIcon
 } from './icons'
 
 // A "trace" line rendered in the transcript. Chat turns and tool activity share
-// the same visual stream so you can watch the agent think.
-type Entry =
-  | { kind: 'user'; text: string }
-  | { kind: 'assistant'; text: string }
-  | { kind: 'tool'; label: string; detail: string; ok?: boolean }
-  | { kind: 'warning'; text: string }
-  | { kind: 'error'; text: string }
+// the same visual stream so you can watch the agent think. Aliased to the shared
+// TranscriptEntry so a conversation can be saved and restored verbatim.
+type Entry = TranscriptEntry
 
 // A tool call awaiting the user's approval decision.
 interface PendingApproval {
@@ -198,6 +199,11 @@ export function App(): JSX.Element {
   const [contextEditorOpen, setContextEditorOpen] = useState(false)
   const [contextBusy, setContextBusy] = useState(false)
   const [contextError, setContextError] = useState<string | null>(null)
+  // Live per-category context usage for the indicator, plus its popover/compact
+  // state. Refreshed whenever the conversation or model context changes.
+  const [breakdown, setBreakdown] = useState<ContextBreakdown | null>(null)
+  const [usageOpen, setUsageOpen] = useState(false)
+  const [compacting, setCompacting] = useState(false)
   const [pantryOpen, setPantryOpen] = useState(false)
   const [modelsOpen, setModelsOpen] = useState(false)
   const [thinkingPhrases, setThinkingPhrases] = useState<string[]>([])
@@ -207,6 +213,17 @@ export function App(): JSX.Element {
     () => (localStorage.getItem('theme') as Theme | null) ?? 'dark'
   )
   const [version, setVersion] = useState('')
+  // Saved-conversation state. `sessionId` identifies the live conversation being
+  // edited; `sessions` backs the history sidebar. `currentTitle` is the
+  // auto-generated title once the first exchange has happened.
+  const [sessions, setSessions] = useState<SessionSummary[]>([])
+  const [sessionId, setSessionId] = useState<string>(() => crypto.randomUUID())
+  const [currentTitle, setCurrentTitle] = useState('')
+  const [historyOpen, setHistoryOpen] = useState(false)
+  const createdAtRef = useRef<number>(Date.now())
+  // Set right before loading a saved session so the autosave effect skips the
+  // render caused purely by the load (which would otherwise bump updatedAt).
+  const suppressSaveRef = useRef(false)
   const scrollRef = useRef<HTMLDivElement>(null)
   // Active microphone recorder and the audio chunks it has produced so far.
   // Held in refs (not state) so the MediaRecorder callbacks always see the
@@ -238,16 +255,189 @@ export function App(): JSX.Element {
       .catch(() => setContext(null))
   }
 
+  // Recompute the per-category context usage for the live indicator. Cheap and
+  // local (a size estimate in main), so it's safe to call after every turn.
+  function refreshBreakdown(msgs: ChatMessage[]): void {
+    window.api
+      .getContextBreakdown(msgs)
+      .then(setBreakdown)
+      .catch(() => setBreakdown(null))
+  }
+
+  // The "Compact Conversation" button: summarize older messages on demand,
+  // adopt the compacted history, and note it in the transcript.
+  async function compactNow(): Promise<void> {
+    if (compacting || busy) return
+    setCompacting(true)
+    try {
+      const compacted = await window.api.compactHistory(history)
+      if (compacted) {
+        setHistory(compacted)
+        setEntries((e) => [
+          ...e,
+          { kind: 'warning', text: 'Compacted older messages to free up context.' }
+        ])
+        refreshBreakdown(compacted)
+      } else {
+        setEntries((e) => [
+          ...e,
+          { kind: 'warning', text: 'Nothing to compact yet — the conversation is still short.' }
+        ])
+      }
+      setUsageOpen(false)
+    } catch (err) {
+      setEntries((e) => [...e, { kind: 'error', text: `Couldn't compact: ${String(err)}` }])
+    } finally {
+      setCompacting(false)
+    }
+  }
+
+  // Reload the saved-conversation list backing the history sidebar.
+  function refreshSessions(): void {
+    window.api.listSessions().then(setSessions).catch(() => setSessions([]))
+  }
+
+  // Persist the live conversation (model history + visual transcript) under the
+  // current session id. Called by the autosave effect once a turn settles.
+  function persistCurrent(): void {
+    if (history.length === 0) return
+    const firstUser = history.find((m) => m.role === 'user')
+    const title =
+      currentTitle || (firstUser?.content ?? 'New conversation').trim().slice(0, 60)
+    window.api
+      .saveSession({
+        id: sessionId,
+        title,
+        createdAt: createdAtRef.current,
+        updatedAt: Date.now(),
+        messageCount: history.length,
+        model: context?.model,
+        history,
+        entries
+      })
+      .then(setSessions)
+      .catch(() => {})
+  }
+
+  // Flush the current conversation, then reset to a fresh, empty session so the
+  // old one is preserved and a new topic starts clean.
+  function newSession(): void {
+    persistCurrent()
+    setEntries([])
+    setHistory([])
+    setCurrentTitle('')
+    createdAtRef.current = Date.now()
+    setSessionId(crypto.randomUUID())
+  }
+
+  // Load a saved conversation into the live view so the user can continue it.
+  // Saves whatever is current first so nothing is lost when switching.
+  function openSession(id: string): void {
+    if (id === sessionId) {
+      setHistoryOpen(false)
+      return
+    }
+    persistCurrent()
+    window.api
+      .loadSession(id)
+      .then((session) => {
+        if (!session) return
+        suppressSaveRef.current = true
+        setSessionId(session.id)
+        setCurrentTitle(session.title)
+        createdAtRef.current = session.createdAt
+        setEntries(session.entries)
+        setHistory(session.history)
+        setHistoryOpen(false)
+      })
+      .catch(() => {})
+  }
+
+  // Delete a saved conversation. If it's the one on screen, start fresh so the
+  // view doesn't keep re-saving a just-deleted session.
+  function removeSession(id: string): void {
+    window.api
+      .deleteSession(id)
+      .then((list) => {
+        setSessions(list)
+        if (id === sessionId) {
+          setEntries([])
+          setHistory([])
+          setCurrentTitle('')
+          createdAtRef.current = Date.now()
+          setSessionId(crypto.randomUUID())
+        }
+      })
+      .catch(() => {})
+  }
+
+  // Wipe all saved conversations and reset to a fresh, empty session.
+  function clearHistory(): void {
+    window.api
+      .clearSessions()
+      .then((list) => {
+        setSessions(list)
+        setEntries([])
+        setHistory([])
+        setCurrentTitle('')
+        createdAtRef.current = Date.now()
+        setSessionId(crypto.randomUUID())
+      })
+      .catch(() => {})
+  }
+
   useEffect(() => {
     refreshTools()
     window.api.getSpeak().then(setSpeak).catch(() => setSpeak(false))
     refreshContext()
+    refreshSessions()
     window.api.getAppVersion().then(setVersion).catch(() => setVersion(''))
     window.api
       .getThinkingPhrases()
       .then(setThinkingPhrases)
       .catch(() => setThinkingPhrases([]))
   }, [])
+
+  // Autosave the live conversation whenever a turn settles (busy clears) or the
+  // title arrives. Skips the render triggered purely by loading a saved session
+  // so merely viewing an old chat doesn't bump its timestamp.
+  useEffect(() => {
+    if (suppressSaveRef.current) {
+      suppressSaveRef.current = false
+      return
+    }
+    if (busy || history.length === 0) return
+    persistCurrent()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [history, busy, currentTitle])
+
+  // Once the first full exchange exists, ask the model for a short title. Best
+  // effort and non-blocking; failures leave the trimmed-first-message fallback.
+  useEffect(() => {
+    if (currentTitle || busy) return
+    const hasUser = history.some((m) => m.role === 'user')
+    const hasAssistant = history.some((m) => m.role === 'assistant')
+    if (!hasUser || !hasAssistant) return
+    let cancelled = false
+    window.api
+      .suggestTitle(history)
+      .then((title) => {
+        if (!cancelled && title) setCurrentTitle(title)
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [history, busy, currentTitle])
+
+  // Keep the context-usage indicator current: recompute the per-category split
+  // whenever the conversation settles or the model's context window changes.
+  useEffect(() => {
+    if (busy) return
+    refreshBreakdown(history)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [history, busy, context?.contextSize, tools.length])
 
   // While the agent is working — or audio is being transcribed — cycle a fresh
   // playful phrase. The first phrase is picked when the work starts; subsequent
@@ -487,6 +677,15 @@ export function App(): JSX.Element {
           ? `Request too large: ~${event.estimatedTokens} tokens exceed the usable ${usable} of ${event.contextSize} (reserving ${event.reserve} for the reply). It was not sent — shorten the chat, disable tools, or raise the context size.`
           : `Heads up: this request is ~${event.estimatedTokens} tokens, close to the usable ${usable}-token limit (context ${event.contextSize}).`
         setEntries((e) => [...e, { kind: 'warning', text }])
+      } else if (event.type === 'history_compacted') {
+        // The agent summarized older messages to reclaim context. Adopt the
+        // compacted model-facing history; new assistant turns from this same
+        // reply are still appended on 'done'. The visual transcript is kept.
+        setHistory(event.messages)
+        setEntries((e) => [
+          ...e,
+          { kind: 'warning', text: 'Compacted older messages to free up context.' }
+        ])
       } else if (event.type === 'error') {
         setEntries((e) => [...e, { kind: 'error', text: event.message }])
       } else if (event.type === 'done') {
@@ -599,6 +798,23 @@ export function App(): JSX.Element {
               )}
             </div>
           )}
+          {breakdown !== null && (
+            <div className="context-control">
+              <ContextUsageBadge
+                breakdown={breakdown}
+                open={usageOpen}
+                onToggle={() => setUsageOpen((o) => !o)}
+              />
+              {usageOpen && (
+                <ContextUsage
+                  breakdown={breakdown}
+                  compacting={compacting}
+                  canCompact={history.length > 0 && !busy}
+                  onCompact={() => void compactNow()}
+                />
+              )}
+            </div>
+          )}
           <button
             className="speak-toggle"
             onClick={() => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))}
@@ -614,6 +830,21 @@ export function App(): JSX.Element {
             aria-label={speak ? 'Spoken replies on' : 'Spoken replies off'}
           >
             {speak ? <SpeakerWaveIcon /> : <SpeakerXMarkIcon />}
+          </button>
+          <button
+            className="pantry-toggle"
+            onClick={newSession}
+            disabled={busy}
+            title="Save this chat and start a new one"
+          >
+            ＋ New
+          </button>
+          <button
+            className="pantry-toggle"
+            onClick={() => setHistoryOpen(true)}
+            title="Browse and continue past conversations"
+          >
+            <ClockIcon /> History
           </button>
           <button
             className="pantry-toggle"
@@ -772,6 +1003,16 @@ export function App(): JSX.Element {
       {pantryOpen && (
         <Pantry onClose={() => setPantryOpen(false)} onChanged={refreshTools} />
       )}
+      {historyOpen && (
+        <History
+          sessions={sessions}
+          activeId={sessionId}
+          onOpen={openSession}
+          onDelete={removeSession}
+          onClear={clearHistory}
+          onClose={() => setHistoryOpen(false)}
+        />
+      )}
       {modelsOpen && (
         <Models
           onClose={() => setModelsOpen(false)}
@@ -867,6 +1108,141 @@ function ConnectionEditor({
   )
 }
 
+// Compact readable token count: 1234 -> 1.2K, 1_500_000 -> 1.5M.
+function formatTokens(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
+  if (n >= 1000) return `${(n / 1000).toFixed(1)}K`
+  return String(n)
+}
+
+// The always-visible context-usage pill: a percent plus a thin fill bar that
+// turns amber then red as the window fills. Clicking opens the breakdown.
+function ContextUsageBadge({
+  breakdown,
+  open,
+  onToggle
+}: {
+  breakdown: ContextBreakdown
+  open: boolean
+  onToggle: () => void
+}): JSX.Element {
+  const pct = breakdown.contextSize > 0
+    ? Math.min(100, Math.round((breakdown.usedTokens / breakdown.contextSize) * 100))
+    : 0
+  const level = pct >= 90 ? 'crit' : pct >= 70 ? 'warn' : 'ok'
+  return (
+    <button
+      className={`context-usage-badge ${level} ${open ? 'open' : ''}`}
+      onClick={onToggle}
+      title={
+        `Context used: ${breakdown.usedTokens.toLocaleString()} of ` +
+        `${breakdown.contextSize.toLocaleString()} tokens (${pct}%)\nClick for a breakdown`
+      }
+    >
+      <span className="context-usage-bar" aria-hidden="true">
+        <span className="context-usage-fill" style={{ width: `${pct}%` }} />
+      </span>
+      {pct}%
+    </button>
+  )
+}
+
+// The breakdown popover, modeled on the reference indicator: a header total, a
+// segmented bar, per-category rows grouped into System / User Context /
+// Uncategorized, and a manual "Compact Conversation" action.
+function ContextUsage({
+  breakdown,
+  compacting,
+  canCompact,
+  onCompact
+}: {
+  breakdown: ContextBreakdown
+  compacting: boolean
+  canCompact: boolean
+  onCompact: () => void
+}): JSX.Element {
+  const { contextSize, reserve, usedTokens, categories } = breakdown
+  const pct = (n: number): number =>
+    contextSize > 0 ? Math.round((n / contextSize) * 1000) / 10 : 0
+  const usedPct = contextSize > 0 ? Math.min(100, Math.round((usedTokens / contextSize) * 100)) : 0
+
+  // Legend rows in draw order; the donut ring is built from the same list so
+  // colours and proportions stay in sync.
+  const items = [
+    { key: 'system', label: 'System', color: 'var(--c-system)', tokens: categories.systemInstructions },
+    { key: 'tools', label: 'Tools', color: 'var(--c-tools)', tokens: categories.toolDefinitions },
+    { key: 'messages', label: 'Messages', color: 'var(--c-messages)', tokens: categories.messages },
+    { key: 'results', label: 'Results', color: 'var(--c-results)', tokens: categories.toolResults },
+    { key: 'other', label: 'Other', color: 'var(--c-other)', tokens: categories.other }
+  ]
+
+  // Build the conic-gradient ring: each category takes its share of the whole
+  // window, followed by the hatched reserve slice, then the empty remainder.
+  const frac = (n: number): number => (contextSize > 0 ? Math.max(0, n / contextSize) : 0)
+  let acc = 0
+  const stops: string[] = []
+  for (const it of items) {
+    const start = acc * 100
+    acc += frac(it.tokens)
+    stops.push(`${it.color} ${start}% ${acc * 100}%`)
+  }
+  const reserveStart = acc * 100
+  acc += frac(reserve)
+  const reserveEnd = acc * 100
+  const ring =
+    `conic-gradient(${stops.join(', ')}, ` +
+    `var(--c-reserve) ${reserveStart}% ${reserveEnd}%, ` +
+    `var(--border) ${reserveEnd}% 100%)`
+
+  return (
+    <div className="context-usage-pop usage-a" onClick={(e) => e.stopPropagation()}>
+      <div className="usage-a-top">
+        <div className="usage-donut" style={{ background: ring }}>
+          <div className="usage-donut-hole">
+            <b>{usedPct}%</b>
+            <small>used</small>
+          </div>
+        </div>
+        <div className="usage-a-meta">
+          <div className="usage-a-big">
+            {formatTokens(usedTokens)} / {formatTokens(contextSize)}
+          </div>
+          <div className="usage-a-sub">tokens in context</div>
+          <div className="usage-a-sub">~{formatTokens(reserve)} reserved for reply</div>
+        </div>
+      </div>
+
+      <div className="usage-a-legend">
+        {items.map((it) => (
+          <div className="usage-a-li" key={it.key}>
+            <span className="usage-dot" style={{ background: it.color }} aria-hidden="true" />
+            {it.label}
+            <span className="usage-a-v">{pct(it.tokens)}%</span>
+          </div>
+        ))}
+        <div className="usage-a-li">
+          <span className="usage-dot seg-reserve" aria-hidden="true" />
+          Reserved
+          <span className="usage-a-v">{pct(reserve)}%</span>
+        </div>
+      </div>
+
+      <button
+        className="usage-compact"
+        onClick={onCompact}
+        disabled={!canCompact || compacting}
+        title={
+          canCompact
+            ? 'Summarize older messages to reclaim context'
+            : 'Nothing to compact yet'
+        }
+      >
+        {compacting ? 'Compacting…' : 'Compact Conversation'}
+      </button>
+    </div>
+  )
+}
+
 function ContextEditor({
   info,
   busy,
@@ -936,6 +1312,118 @@ function ContextEditor({
         <p className="context-editor-err">Enter a value between 512 and {max.toLocaleString()}.</p>
       )}
       {error && <p className="context-editor-err">{error}</p>}
+    </div>
+  )
+}
+
+// The conversation-history slide-over (left side): lists saved conversations
+// newest-first and lets the user reopen one to continue it, or delete it. The
+// currently open conversation is marked so it's clear what's live.
+function History({
+  sessions,
+  activeId,
+  onOpen,
+  onDelete,
+  onClear,
+  onClose
+}: {
+  sessions: SessionSummary[]
+  activeId: string
+  onOpen: (id: string) => void
+  onDelete: (id: string) => void
+  onClear: () => void
+  onClose: () => void
+}): JSX.Element {
+  const [query, setQuery] = useState('')
+  // Set once the user clicks "Clear all", so the button turns into a confirm.
+  const [confirmClear, setConfirmClear] = useState(false)
+
+  const q = query.trim().toLowerCase()
+  const filtered = q
+    ? sessions.filter((s) => (s.title || '').toLowerCase().includes(q))
+    : sessions
+
+  return (
+    <div className="pantry-overlay history-overlay" onClick={onClose}>
+      <aside className="pantry history-panel" onClick={(e) => e.stopPropagation()}>
+        <header className="pantry-head">
+          <div>
+            <h2>
+              <ClockIcon /> History
+            </h2>
+            <p className="pantry-sub">Reopen a past conversation to pick up where you left off</p>
+          </div>
+          <button className="pantry-close" onClick={onClose} aria-label="Close" title="Close">
+            ✕
+          </button>
+        </header>
+        <div className="history-search">
+          <input
+            type="text"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search conversations…"
+            aria-label="Search conversations"
+          />
+          {sessions.length > 0 &&
+            (confirmClear ? (
+              <div className="history-confirm">
+                <span>Delete all?</span>
+                <button
+                  className="history-confirm-yes"
+                  onClick={() => {
+                    onClear()
+                    setConfirmClear(false)
+                  }}
+                >
+                  Yes, clear all
+                </button>
+                <button className="history-confirm-no" onClick={() => setConfirmClear(false)}>
+                  Cancel
+                </button>
+              </div>
+            ) : (
+              <button
+                className="history-clear"
+                onClick={() => setConfirmClear(true)}
+                title="Delete every saved conversation"
+              >
+                <TrashIcon /> Clear all
+              </button>
+            ))}
+        </div>
+        <div className="history-list">
+          {sessions.length === 0 && (
+            <div className="empty">No saved conversations yet. They'll appear here once you chat.</div>
+          )}
+          {sessions.length > 0 && filtered.length === 0 && (
+            <div className="empty">No conversations match "{query}".</div>
+          )}
+          {filtered.map((s) => (
+            <div
+              key={s.id}
+              className={`history-item ${s.id === activeId ? 'active' : ''}`}
+            >
+              <button className="history-open" onClick={() => onOpen(s.id)} title="Open this conversation">
+                <span className="history-title">{s.title || 'Untitled conversation'}</span>
+                <span className="history-meta">
+                  {new Date(s.updatedAt).toLocaleString()} · {s.messageCount} message
+                  {s.messageCount === 1 ? '' : 's'}
+                  {s.id === activeId ? ' · current' : ''}
+                </span>
+              </button>
+              <button
+                className="history-del"
+                onClick={() => onDelete(s.id)}
+                aria-label="Delete conversation"
+                title="Delete conversation"
+              >
+                <TrashIcon />
+              </button>
+            </div>
+          ))}
+        </div>
+      </aside>
     </div>
   )
 }
