@@ -4,12 +4,15 @@
 #
 #   gate    → validates the release notes file exists and the tag matches
 #             package.json (scripts/check-release.mjs), plus a type-check.
+#   audit   → scans npm dependencies for known vulnerabilities and blocks the
+#             release on any high/critical advisory (npm audit).
 #   build   → builds and packages installers on Windows, macOS and Linux.
 #   release → creates the GitHub Release using releases/<tag>.md as the body
 #             and attaches every installer artifact.
 #
-# The `gate` job is a hard prerequisite for `build`, so no installer is ever
-# produced for a tag that lacks its releases/v<version>.md notes file.
+# Both `gate` and `audit` are hard prerequisites for `build`, so no installer is
+# ever produced for a tag that lacks its releases/v<version>.md notes file or
+# that ships a known-vulnerable dependency.
 
 name: Release
 
@@ -52,9 +55,25 @@ jobs:
       - name: Type-check
         run: npm run typecheck
 
+  audit:
+    name: Dependency vulnerability scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Scan npm dependencies for known vulnerabilities
+        run: npm run audit
+
   build:
     name: Build ${{ matrix.os }}
-    needs: gate
+    needs: [gate, audit]
     strategy:
       fail-fast: false
       matrix:
@@ -93,12 +112,12 @@ jobs:
 
   release:
     name: Publish GitHub Release
-    needs: [gate, build]
+    needs: [gate, audit, build]
     runs-on: ubuntu-latest
-    # Publish as long as the gate passed and the run wasn't cancelled, even if
-    # one platform's build failed — so a single flaky/broken OS leg can't block
-    # shipping the installers that did build successfully.
-    if: ${{ !cancelled() && needs.gate.result == 'success' }}
+    # Publish as long as the gate and audit passed and the run wasn't cancelled,
+    # even if one platform's build failed — so a single flaky/broken OS leg can't
+    # block shipping the installers that did build successfully.
+    if: ${{ !cancelled() && needs.gate.result == 'success' && needs.audit.result == 'success' }}
     steps:
       - uses: actions/checkout@v4
         with:
