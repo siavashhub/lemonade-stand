@@ -74,10 +74,32 @@ npm run package:win        # or package:mac / package:linux
 ### 4. Commit, tag, and push
 
 ```powershell
-git add package.json releases/v0.0.2.md
-git commit -m "Release v0.0.2"
-git tag v0.0.2
-git push origin main --tags
+git checkout -b release/0.2
+git push --set-upstream origin release/0.2
+```
+
+work on the release branch...
+```powershell
+git add package.json
+git commit -m "add: updated package file"
+git push 
+```
+
+When ready to cut a release, create a release file and commit and push:
+```powershell
+git add releases/v0.2.0.md
+git commit -m "add: Release v0.2.0"
+git push 
+```
+
+Create a PR into main and merge.
+
+Pull the changes from main and tag to cut a release:
+```powershell
+git checkout main
+git pull
+git tag v0.2.0
+git push origin v0.2.0
 ```
 
 ### 5. The pipeline takes over
