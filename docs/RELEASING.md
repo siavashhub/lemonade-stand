@@ -138,8 +138,18 @@ git checkout release/0.2
 git tag v0.2.1
 ```
 
-Finally cherry pick hotfix commits to main
+Finally cherry pick hotfix commits to main:
 
+forward-port the hotfix to main via a temp branch
+```powershell
+git checkout main
+git pull
+git checkout -b forwardport/v0.2.1        # temp branch
+git cherry-pick <hotfix-commit-sha>       # or a range: <sha1>^..<sha2>
+git push --set-upstream origin forwardport/v0.2.1
+```
+
+open PR: forwardport/v0.2.1  --->  main, then merge (squash is fine)
 
 ## Local packaging (no release)
 
