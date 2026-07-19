@@ -2270,6 +2270,7 @@ button.server-status:hover {
   display: flex;
   flex: 1;
   min-height: 0;
+  position: relative;
 }
 
 .chat-col {
@@ -2559,4 +2560,221 @@ button.server-status:hover {
     min-width: 0;
   }
 }
+
+/* Subtle button to create a new napkin manually. Positioned on the right edge
+   of the stage, in the vertical bar next to the napkin panel. Small and
+   understated to avoid cluttering the UI, but visible enough to discover. */
+.napkin-creator-btn {
+  position: absolute;
+  right: 16px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: #f39c12;
+  border: none;
+  color: #1a1a1a;
+  font-size: 20px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 2px 8px rgba(243, 156, 18, 0.3);
+  transition: transform 0.15s ease, box-shadow 0.15s ease, background 0.2s ease;
+  z-index: 40;
+}
+
+.napkin-creator-btn:hover {
+  transform: translateY(-50%) scale(1.1);
+  box-shadow: 0 4px 12px rgba(243, 156, 18, 0.45);
+  background: #f5ad28;
+}
+
+.napkin-creator-btn:active {
+  transform: translateY(-50%) scale(0.95);
+  box-shadow: 0 1px 4px rgba(243, 156, 18, 0.3);
+}
+
+/* The napkin creator modal overlay */
+.napkin-creator-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 60;
+  animation: creator-fade-in 0.2s ease-out;
+}
+
+@keyframes creator-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.napkin-creator-modal {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+  padding: 24px;
+  max-width: 420px;
+  width: 90vw;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  animation: creator-slide-in 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+@keyframes creator-slide-in {
+  from {
+    transform: translateY(-20px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+.creator-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.creator-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text);
+  margin: 0;
+}
+
+.creator-close {
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.creator-close:hover {
+  color: #e05a5a;
+}
+
+.creator-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.creator-label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.creator-label > input,
+.creator-label > textarea {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 13px;
+  font-family: inherit;
+}
+
+.creator-label > input:focus,
+.creator-label > textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.creator-label > textarea {
+  resize: vertical;
+  min-height: 100px;
+}
+
+.creator-kinds {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(70px, 1fr));
+  gap: 8px;
+}
+
+.kind-btn {
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease, color 0.15s ease;
+}
+
+.kind-btn:hover {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.kind-btn.active {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+.creator-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.creator-btn {
+  border-radius: 8px;
+  padding: 8px 16px;
+  font-weight: 600;
+  cursor: pointer;
+  font-size: 13px;
+  border: 1px solid var(--border);
+}
+
+.creator-btn.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on-accent);
+}
+
+.creator-btn.primary:hover {
+  filter: brightness(1.08);
+}
+
+.creator-btn.cancel {
+  background: transparent;
+  color: var(--text);
+}
+
+.creator-btn.cancel:hover {
+  border-color: var(--accent);
+}
+
 

@@ -13,6 +13,7 @@ import type {
   ModelInfo,
   Napkin,
   NapkinChoice,
+  NapkinKind,
   Pitcher,
   PitcherEvent,
   PlanStep,
@@ -241,6 +242,8 @@ export function App(): JSX.Element {
     prompt: string
     choices: NapkinChoice[]
   } | null>(null)
+  // User-initiated napkin creation form; shown when the side button is clicked.
+  const [showNapkinCreator, setShowNapkinCreator] = useState(false)
   const [serverStatus, setServerStatus] = useState<ServerStatus>('checking')
   const [connectionBusy, setConnectionBusy] = useState(false)
   const [connectionError, setConnectionError] = useState<string | null>(null)
@@ -1072,6 +1075,15 @@ export function App(): JSX.Element {
       </header>
 
       <div className="stage">
+        {/* Subtle napkin creation button on right edge */}
+        <button
+          className="napkin-creator-btn"
+          onClick={() => setShowNapkinCreator(true)}
+          title="Create a napkin artifact (code, markdown, diagram, etc.)"
+          aria-label="Create napkin"
+        >
+          +
+        </button>
         <div className="chat-col">
           <div className="transcript" ref={scrollRef}>
         {entries.length === 0 && (
@@ -1330,6 +1342,16 @@ export function App(): JSX.Element {
             theme={theme}
             onChoose={chooseNapkin}
             onClose={() => setNapkin(null)}
+          />
+        )}
+        {showNapkinCreator && (
+          <NapkinCreatorModal
+            onClose={() => setShowNapkinCreator(false)}
+            onCreateNapkin={(napkin) => {
+              setNapkin(napkin)
+              setEntries((e) => [...e, { kind: 'napkin', napkin }])
+              setShowNapkinCreator(false)
+            }}
           />
         )}
       </div>
@@ -3061,3 +3083,102 @@ function MermaidNapkin({ napkin, theme }: { napkin: Napkin; theme: Theme }): JSX
   if (!svg) return <div className="napkin-empty">Rendering diagram…</div>
   return <div className="napkin-mermaid" dangerouslySetInnerHTML={{ __html: svg }} />
 }
+
+// Modal for creating a napkin manually. User picks a kind (code, markdown, etc.)
+// and optionally fills in initial content. Creates and displays the napkin.
+function NapkinCreatorModal({
+  onClose,
+  onCreateNapkin
+}: {
+  onClose: () => void
+  onCreateNapkin: (napkin: Napkin) => void
+}): JSX.Element {
+  const [selectedKind, setSelectedKind] = useState<NapkinKind>('code')
+  const [title, setTitle] = useState('Untitled')
+  const [content, setContent] = useState('')
+
+  const kinds: NapkinKind[] = ['code', 'markdown', 'mermaid', 'svg', 'image']
+
+  function handleCreate(): void {
+    const napkin: Napkin = {
+      title: title.trim() || 'Untitled',
+      kind: selectedKind,
+      content: content.trim(),
+      language: selectedKind === 'code' ? 'js' : undefined,
+      mimeType: selectedKind === 'image' ? 'image/png' : undefined
+    }
+    onCreateNapkin(napkin)
+  }
+
+  return (
+    <div className="napkin-creator-overlay" onClick={onClose}>
+      <div className="napkin-creator-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="creator-head">
+          <h2 className="creator-title">New Napkin</h2>
+          <button className="creator-close" onClick={onClose} aria-label="Close">
+            ✕
+          </button>
+        </div>
+
+        <div className="creator-body">
+          <div className="creator-label">
+            <span>Title</span>
+            <input
+              type="text"
+              placeholder="My artifact"
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') handleCreate()
+              }}
+            />
+          </div>
+
+          <div className="creator-label">
+            <span>Type</span>
+            <div className="creator-kinds">
+              {kinds.map((kind) => (
+                <button
+                  key={kind}
+                  className={`kind-btn ${selectedKind === kind ? 'active' : ''}`}
+                  onClick={() => setSelectedKind(kind)}
+                >
+                  {kind}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="creator-label">
+            <span>Content (optional)</span>
+            <textarea
+              placeholder={
+                selectedKind === 'code'
+                  ? 'function hello() {\n  return "world"\n}'
+                  : selectedKind === 'markdown'
+                    ? '# Hello\n\nSome **markdown** content'
+                    : selectedKind === 'mermaid'
+                      ? 'graph TD\n  A --> B'
+                      : selectedKind === 'svg'
+                        ? '<svg>...</svg>'
+                        : 'Paste image data URL or base64 encoded PNG'
+              }
+              value={content}
+              onChange={(e) => setContent(e.target.value)}
+            />
+          </div>
+        </div>
+
+        <div className="creator-actions">
+          <button className="creator-btn cancel" onClick={onClose}>
+            Cancel
+          </button>
+          <button className="creator-btn primary" onClick={handleCreate}>
+            Create
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
