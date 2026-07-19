@@ -1003,6 +1003,45 @@ body {
   font-size: 13px;
 }
 
+/* The model's chain-of-thought. Dimmed and collapsed by default so it never
+   competes with the final answer; click "Reasoning" to expand. */
+.line.reasoning {
+  align-self: flex-start;
+  max-width: 100%;
+  background: var(--tool);
+  border-left: 2px solid var(--muted);
+  border-radius: 4px;
+  padding: 4px 10px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.reasoning-summary {
+  cursor: pointer;
+  user-select: none;
+  list-style: none;
+  color: var(--muted);
+  font-style: italic;
+  letter-spacing: 0.02em;
+}
+
+.reasoning-summary::-webkit-details-marker {
+  display: none;
+}
+
+.reasoning-summary::before {
+  content: '💭 ';
+}
+
+.reasoning-body {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border);
+  white-space: pre-wrap;
+  line-height: 1.5;
+  font-family: ui-monospace, 'Cascadia Code', Consolas, monospace;
+}
+
 /* Live task plan/todo checklist emitted by the agent's update_plan tool. Shown
    inline and updated in place as the model works through the steps. */
 .line.plan {
@@ -2474,7 +2513,8 @@ button.server-status:hover {
   flex: 0 0 auto;
 }
 
-.napkin-copy {
+.napkin-copy,
+.napkin-folder {
   border: 1px solid var(--border);
   background: var(--bg);
   color: var(--text);
@@ -2482,9 +2522,13 @@ button.server-status:hover {
   padding: 4px 10px;
   font-size: 12px;
   cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
-.napkin-copy:hover {
+.napkin-copy:hover,
+.napkin-folder:hover {
   border-color: var(--accent);
   color: var(--accent);
 }

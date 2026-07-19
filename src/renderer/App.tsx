@@ -866,6 +866,10 @@ export function App(): JSX.Element {
       if (event.type === 'assistant_text') {
         collected.push({ role: 'assistant', content: event.text })
         setEntries((e) => [...e, { kind: 'assistant', text: event.text }])
+      } else if (event.type === 'reasoning') {
+        // Display-only chain-of-thought: shown in the transcript but never added
+        // to `collected` (the model-facing history), so it can't bloat context.
+        setEntries((e) => [...e, { kind: 'reasoning', text: event.text }])
       } else if (event.type === 'tool_call') {
         setEntries((e) => [
           ...e,
@@ -1380,6 +1384,13 @@ export function App(): JSX.Element {
             theme={theme}
             onChoose={chooseNapkin}
             onClose={() => setNapkin(null)}
+            onOpenFolder={async (path) => {
+              try {
+                await window.api.openFolderInExplorer(path)
+              } catch (err) {
+                console.error('Failed to open folder:', err)
+              }
+            }}
           />
         )}
         {showNapkinCreator && (
@@ -2667,6 +2678,14 @@ function Line({
   if (entry.kind === 'warning') {
     return <div className="line warning">{entry.text}</div>
   }
+  if (entry.kind === 'reasoning') {
+    return (
+      <details className="line reasoning">
+        <summary className="reasoning-summary">Reasoning</summary>
+        <div className="reasoning-body">{entry.text}</div>
+      </details>
+    )
+  }
   return (
     <div className={`line ${entry.kind}`}>
       <span className="role">{entry.kind === 'user' ? 'You' : 'Agent'}</span>
@@ -2965,13 +2984,15 @@ function NapkinPanel({
   choice,
   theme,
   onChoose,
-  onClose
+  onClose,
+  onOpenFolder
 }: {
   napkin: Napkin | null
   choice: { id: string; title: string; prompt: string; choices: NapkinChoice[] } | null
   theme: Theme
   onChoose: (choiceId: string) => void
   onClose: () => void
+  onOpenFolder?: (path: string) => void
 }): JSX.Element {
   const [copied, setCopied] = useState(false)
   // Only text-based artifacts have a copyable source; images don't.
@@ -2996,6 +3017,15 @@ function NapkinPanel({
           {napkin && <span className="napkin-title">{napkin.title}</span>}
         </div>
         <div className="napkin-head-actions">
+          {napkin && napkin.folderPath && onOpenFolder && (
+            <button
+              className="napkin-folder"
+              onClick={() => onOpenFolder(napkin.folderPath!)}
+              title="Open folder in explorer"
+            >
+              📁
+            </button>
+          )}
           {canCopy && (
             <button
               className="napkin-copy"

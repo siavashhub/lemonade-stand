@@ -205,6 +205,10 @@ const api: RendererApi = {
 
   closeWindow(): void {
     ipcRenderer.send('window:close')
+  },
+
+  async openFolderInExplorer(folderPath: string): Promise<void> {
+    return await ipcRenderer.invoke('explorer:open-folder', folderPath)
   }
 }
 

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, Notification } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, Notification, shell } from 'electron'
 import { randomUUID } from 'node:crypto'
 import { copyFileSync, existsSync, mkdirSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
@@ -435,6 +435,15 @@ ipcMain.on('agent:set-bypass', (_event, enabled: boolean) => {
   bypassApprovals = enabled
 })
 
+ipcMain.handle('explorer:open-folder', async (_event, folderPath: string) => {
+  try {
+    await shell.openPath(folderPath)
+  } catch (err) {
+    console.error('[explorer] failed to open folder:', err)
+    throw err
+  }
+})
+
 // Renderer's answer to a step_limit_request: true to grant another step budget,
 // false to stop. Resolving the stored promise unblocks the agent loop.
 ipcMain.on('agent:continue', (_event, id: string, cont: boolean) => {
@@ -475,6 +484,8 @@ function describeEvent(e: AgentEvent): string {
       return `napkin_choice_request choices=${e.choices.length} prompt=${e.prompt.slice(0, 80)}`
     case 'assistant_text':
       return `assistant_text len=${e.text.trim().length}`
+    case 'reasoning':
+      return `reasoning len=${e.text.trim().length}`
     case 'tool_approval_request':
       return `tool_approval_request ${e.server}__${e.tool}`
     case 'step_limit_request':

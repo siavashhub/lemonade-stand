@@ -53,6 +53,8 @@ export interface Napkin {
   mimeType?: string
   /** Descriptive alt text for `kind:'image'`. */
   alt?: string
+  /** Folder path to open in explorer (shown if napkin came from filesystem tool). */
+  folderPath?: string
 }
 
 /** One selectable option in an `ask_napkin` clarification prompt. */
@@ -239,6 +241,9 @@ export type ApprovalDecision = 'approve' | 'deny' | 'always'
 export type TranscriptEntry =
   | { kind: 'user'; text: string }
   | { kind: 'assistant'; text: string }
+  // The model's chain-of-thought, shown as a dimmed, collapsible block. Kept in
+  // the visual transcript (so it persists/restores) but not in model history.
+  | { kind: 'reasoning'; text: string }
   | { kind: 'tool'; label: string; detail: string; ok?: boolean }
   | { kind: 'plan'; steps: PlanStep[] }
   | { kind: 'napkin'; napkin: Napkin }
@@ -318,6 +323,10 @@ export type PitcherEvent =
 /** Streamed events the main process pushes to the renderer during a turn. */
 export type AgentEvent =
   | { type: 'assistant_text'; text: string }
+  // The model's chain-of-thought for a turn, surfaced for display only. It is
+  // never fed back into the model-facing history (would bloat the context
+  // window) and is never spoken by TTS.
+  | { type: 'reasoning'; text: string }
   | { type: 'tool_call'; server: string; tool: string; args: unknown }
   | { type: 'tool_result'; server: string; tool: string; ok: boolean; preview: string }
   // The model created or revised its working plan via the built-in `update_plan`
@@ -475,4 +484,6 @@ export interface RendererApi {
   toggleMaximizeWindow(): void
   /** Close the window. */
   closeWindow(): void
+  /** Open a folder in Windows Explorer (or equivalent file manager). */
+  openFolderInExplorer(folderPath: string): Promise<void>
 }
