@@ -254,6 +254,12 @@ export function App(): JSX.Element {
   const [activePanel, setActivePanel] = useState<Panel | null>(null)
   const togglePanel = (p: Panel): void => setActivePanel((cur) => (cur === p ? null : p))
   const closePanel = (): void => setActivePanel(null)
+  // Model download/loading state lifted to the app shell so the Models button in
+  // the status bar can double as a progress indicator even when the Models panel
+  // is closed. `downloads` mirrors the server's active jobs; `modelBusyId` is set
+  // while a model is being loaded into memory.
+  const [downloads, setDownloads] = useState<Record<string, DownloadJob>>({})
+  const [modelBusyId, setModelBusyId] = useState<string | null>(null)
   const [thinkingPhrases, setThinkingPhrases] = useState<string[]>([])
   const [thinkingPhrase, setThinkingPhrase] = useState('')
   const [thinkingTick, setThinkingTick] = useState(0)
@@ -305,6 +311,63 @@ export function App(): JSX.Element {
       .then(setContext)
       .catch(() => setContext(null))
   }
+
+  // Poll the server's model-download jobs so the status-bar Models button can
+  // show live download progress no matter where it was started (or whether the
+  // Models panel is open). Finished jobs are cleared from the server so the
+  // indicator settles once a download completes.
+  useEffect(() => {
+    let alive = true
+    const poll = async (): Promise<void> => {
+      const jobs = await window.api.listDownloads().catch(() => [] as DownloadJob[])
+      if (!alive) return
+      const byId: Record<string, DownloadJob> = {}
+      for (const j of jobs) byId[j.modelName] = j
+      setDownloads(byId)
+      for (const j of jobs) {
+        if (j.complete && j.status === 'completed') {
+          void window.api.controlDownload(j.id, 'remove').catch(() => {})
+        }
+      }
+    }
+    void poll()
+    const timer = window.setInterval(() => void poll(), 2000)
+    return () => {
+      alive = false
+      window.clearInterval(timer)
+    }
+  }, [])
+
+  // Start a server-owned download and optimistically show it right away (the
+  // poll above then keeps it live). Throws so the Models panel can surface a
+  // start failure inline.
+  const downloadModel = async (id: string): Promise<void> => {
+    const job = await window.api.downloadModel(id)
+    setDownloads((prev) => ({ ...prev, [job.modelName]: job }))
+  }
+
+  // Cancel + remove a download job, dropping it from the indicator immediately.
+  const cancelModelDownload = async (job: DownloadJob): Promise<void> => {
+    await window.api.controlDownload(job.id, 'cancel').catch(() => {})
+    await window.api.controlDownload(job.id, 'remove').catch(() => {})
+    setDownloads((prev) => {
+      const next = { ...prev }
+      delete next[job.modelName]
+      return next
+    })
+  }
+
+  // Aggregate progress across all in-flight downloads, for the status-bar
+  // Models button. `null` when nothing is downloading.
+  const activeDownloads = Object.values(downloads).filter(
+    (j) => j.running || j.status === 'downloading'
+  )
+  const downloadPercent = activeDownloads.length
+    ? Math.round(
+        activeDownloads.reduce((sum, j) => sum + (j.percent || 0), 0) / activeDownloads.length
+      )
+    : null
+  const modelLoading = modelBusyId != null
 
   // Recompute the per-category context usage for the live indicator. Cheap and
   // local (a size estimate in main), so it's safe to call after every turn.
@@ -1177,11 +1240,28 @@ export function App(): JSX.Element {
             )}
           </div>
           <button
-            className="statusbar-btn"
+            className={`statusbar-btn ${
+              downloadPercent != null ? 'is-downloading' : modelLoading ? 'is-loading' : ''
+            }`}
             onClick={() => setActivePanel('models')}
-            title="Choose the model the agent runs on"
+            title={
+              downloadPercent != null
+                ? `Downloading ${activeDownloads.length} model${activeDownloads.length > 1 ? 's' : ''}… ${downloadPercent}%`
+                : modelLoading
+                  ? 'Loading a model into memory…'
+                  : 'Choose the model the agent runs on'
+            }
           >
             <CpuChipIcon /> Models{context?.model ? ` (${context.model})` : ''}
+            {downloadPercent != null && (
+              <span className="statusbar-tag">↓ {downloadPercent}%</span>
+            )}
+            {downloadPercent == null && modelLoading && (
+              <span className="statusbar-tag">loading…</span>
+            )}
+            {downloadPercent != null && (
+              <span className="statusbar-progress" style={{ width: `${downloadPercent}%` }} />
+            )}
           </button>
           <button
             className={`bypass-toggle ${bypassApprovals ? 'on' : ''}`}
@@ -1237,6 +1317,11 @@ export function App(): JSX.Element {
         <Models
           onClose={closePanel}
           onChanged={refreshContext}
+          downloads={downloads}
+          busyId={modelBusyId}
+          setBusyId={setModelBusyId}
+          onDownload={downloadModel}
+          onCancelDownload={cancelModelDownload}
         />
       )}
     </div>
@@ -1660,19 +1745,34 @@ function History({
 // ones that work well in the agent loop.
 function Models({
   onClose,
-  onChanged
+  onChanged,
+  downloads,
+  busyId,
+  setBusyId,
+  onDownload,
+  onCancelDownload
 }: {
   onClose: () => void
   onChanged: () => void
+  /** Live download jobs keyed by model id, owned by the app shell. */
+  downloads: Record<string, DownloadJob>
+  /** Id of the model currently being loaded into memory, or null. */
+  busyId: string | null
+  setBusyId: (id: string | null) => void
+  /** Start a server-owned download; rejects if the server refuses to start it. */
+  onDownload: (id: string) => Promise<void>
+  /** Cancel and remove a download job. */
+  onCancelDownload: (job: DownloadJob) => Promise<void>
 }): JSX.Element {
   const [models, setModels] = useState<ModelInfo[]>([])
   const [loading, setLoading] = useState(true)
-  const [busyId, setBusyId] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
-  // Live download jobs keyed by model id, refreshed by a poll while any are
-  // active so each card can show a progress bar, byte counts, and status.
-  const [downloads, setDownloads] = useState<Record<string, DownloadJob>>({})
-  const pollRef = useRef<number | null>(null)
+  // Quick-access filter across the catalogue.
+  const [filter, setFilter] = useState<'all' | 'recommended' | 'agent'>('all')
+  // Remembers the last-seen download jobs so we can detect when one finishes
+  // (transitions to complete, or disappears from the server list) and refresh
+  // the model list so the just-downloaded model flips to a Load action.
+  const prevDownloads = useRef<Record<string, DownloadJob>>({})
 
   function refresh(): void {
     setLoading(true)
@@ -1685,59 +1785,21 @@ function Models({
 
   useEffect(refresh, [])
 
-  // Poll the server's download jobs while any are running, so progress bars stay
-  // live. The interval stops itself once every job has settled (and completed
-  // ones are cleared from the server), keeping the panel idle when nothing is
-  // downloading. Any in-flight interval is torn down when the panel unmounts.
-  const stopPolling = (): void => {
-    if (pollRef.current != null) {
-      window.clearInterval(pollRef.current)
-      pollRef.current = null
-    }
-  }
-
-  const poll = async (): Promise<void> => {
-    let jobs: DownloadJob[]
-    try {
-      jobs = await window.api.listDownloads()
-    } catch {
-      return
-    }
-    const byId: Record<string, DownloadJob> = {}
-    for (const j of jobs) byId[j.modelName] = j
-    setDownloads(byId)
-
-    // A finished download flips the model to "downloaded"; refresh the list so
-    // its card offers Load, then clear the settled job from the server.
-    const finished = jobs.filter((j) => j.complete && j.status === 'completed')
-    if (finished.length > 0) {
-      refresh()
-      for (const j of finished) void window.api.controlDownload(j.id, 'remove').catch(() => {})
-    }
-
-    // Keep polling only while a job is still actively running.
-    if (!jobs.some((j) => j.running || j.status === 'downloading')) stopPolling()
-  }
-
-  const startPolling = (): void => {
-    if (pollRef.current != null) return
-    pollRef.current = window.setInterval(() => void poll(), 1000)
-  }
-
+  // When a tracked download completes (or is cleared from the server), refresh
+  // the model list so its card reflects the new on-disk state.
   useEffect(() => {
-    // Adopt any downloads already running on the server (e.g. started before the
-    // panel was opened, or surviving a reload) and resume tracking them.
-    void (async () => {
-      const jobs = await window.api.listDownloads().catch(() => [] as DownloadJob[])
-      if (jobs.length === 0) return
-      const byId: Record<string, DownloadJob> = {}
-      for (const j of jobs) byId[j.modelName] = j
-      setDownloads(byId)
-      if (jobs.some((j) => j.running || j.status === 'downloading')) startPolling()
-    })()
-    return stopPolling
+    const prev = prevDownloads.current
+    let finished = false
+    for (const name of Object.keys(prev)) {
+      const before = prev[name]
+      const now = downloads[name]
+      const wasActive = before.running || before.status === 'downloading'
+      if (wasActive && (!now || now.complete || now.status === 'completed')) finished = true
+    }
+    prevDownloads.current = downloads
+    if (finished) refresh()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [downloads])
 
   async function load(id: string): Promise<void> {
     setBusyId(id)
@@ -1756,22 +1818,14 @@ function Models({
   async function download(id: string): Promise<void> {
     setError(null)
     try {
-      const job = await window.api.downloadModel(id)
-      setDownloads((prev) => ({ ...prev, [job.modelName]: job }))
-      startPolling()
+      await onDownload(id)
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     }
   }
 
   async function cancelDownload(job: DownloadJob): Promise<void> {
-    await window.api.controlDownload(job.id, 'cancel').catch(() => {})
-    await window.api.controlDownload(job.id, 'remove').catch(() => {})
-    setDownloads((prev) => {
-      const next = { ...prev }
-      delete next[job.modelName]
-      return next
-    })
+    await onCancelDownload(job)
   }
 
   async function remove(id: string): Promise<void> {
@@ -1788,17 +1842,26 @@ function Models({
     }
   }
 
+  // The active filter: 'recommended' = Omni collections, 'agent' = tool-calling
+  // capable. 'all' passes everything through.
+  const matchesFilter = (m: ModelInfo): boolean =>
+    filter === 'all' ? true : filter === 'recommended' ? m.omni : m.agentReady
+
   // Only chat models can drive the agent; surface those first and separately.
   const llms = models.filter((m) => m.type === 'llm')
   const others = models.filter((m) => m.type !== 'llm')
 
   // Agent-ready models first, then by name, so the best choices float to top.
   // Omni models lead the list since they're recommended for agentic use.
-  const rankedLlms = [...llms].sort((a, b) => {
-    if (a.omni !== b.omni) return a.omni ? -1 : 1
-    if (a.agentReady !== b.agentReady) return a.agentReady ? -1 : 1
-    return a.id.localeCompare(b.id)
-  })
+  const rankedLlms = [...llms]
+    .sort((a, b) => {
+      if (a.omni !== b.omni) return a.omni ? -1 : 1
+      if (a.agentReady !== b.agentReady) return a.agentReady ? -1 : 1
+      return a.id.localeCompare(b.id)
+    })
+    .filter(matchesFilter)
+  const filteredOthers = others.filter(matchesFilter)
+  const nothingMatches = !loading && models.length > 0 && rankedLlms.length === 0 && filteredOthers.length === 0
 
   return (
     <div className="pantry-overlay" onClick={onClose}>
@@ -1815,11 +1878,45 @@ function Models({
           </button>
         </header>
 
+        <div className="models-filters" role="group" aria-label="Filter models">
+          <button
+            className={`filter-chip ${filter === 'all' ? 'on' : ''}`}
+            onClick={() => setFilter('all')}
+            aria-pressed={filter === 'all'}
+          >
+            All
+          </button>
+          <button
+            className={`filter-chip ${filter === 'recommended' ? 'on' : ''}`}
+            onClick={() => setFilter('recommended')}
+            aria-pressed={filter === 'recommended'}
+            title="Omni collections — recommended for agentic use"
+          >
+            ★ Recommended
+          </button>
+          <button
+            className={`filter-chip ${filter === 'agent' ? 'on' : ''}`}
+            onClick={() => setFilter('agent')}
+            aria-pressed={filter === 'agent'}
+            title="Tool-calling models that work well in the agent loop"
+          >
+            Great for agents
+          </button>
+        </div>
+
         <div className="pantry-list">
           {loading && <div className="pantry-empty">Loading models…</div>}
           {!loading && models.length === 0 && (
             <div className="pantry-empty">
               No models reported. Is the Lemonade server running?
+            </div>
+          )}
+          {nothingMatches && (
+            <div className="pantry-empty">
+              No models match this filter.{' '}
+              <button className="link-inline" onClick={() => setFilter('all')}>
+                Show all
+              </button>
             </div>
           )}
           {error && <div className="card-status err">{error}</div>}
@@ -1837,10 +1934,10 @@ function Models({
             />
           ))}
 
-          {others.length > 0 && (
+          {filteredOthers.length > 0 && (
             <>
               <div className="pantry-section">Other models (not for chat/agent)</div>
-              {others.map((m) => (
+              {filteredOthers.map((m) => (
                 <ModelCard
                   key={m.id}
                   model={m}

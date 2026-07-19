@@ -739,6 +739,39 @@ body {
   font-weight: 600;
   line-height: 1.4;
   cursor: pointer;
+  position: relative;
+  overflow: hidden;
+}
+
+/* Model download / loading state on the status-bar Models button. */
+.statusbar-btn.is-downloading,
+.statusbar-btn.is-loading {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+/* Small "↓ 45%" / "loading…" pill appended to the Models button. */
+.statusbar-tag {
+  border-radius: 999px;
+  padding: 0 6px;
+  font-size: 10px;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+
+.statusbar-btn.is-loading .statusbar-tag {
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
+/* Thin progress fill along the bottom edge of the Models button. */
+.statusbar-progress {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  height: 2px;
+  background: var(--accent);
+  transition: width 0.3s ease;
 }
 
 .statusbar-btn svg {
@@ -1687,6 +1720,48 @@ body {
 .btn-inline {
   padding: 3px 10px !important;
   font-size: 11px !important;
+}
+
+/* Quick-access filter chips at the top of the Models panel. */
+.models-filters {
+  display: flex;
+  gap: 8px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+
+.filter-chip {
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--muted);
+  border-radius: 999px;
+  padding: 4px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.filter-chip:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.filter-chip.on {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on-accent);
+}
+
+/* Inline text button used in empty states (e.g. "Show all"). */
+.link-inline {
+  background: none;
+  border: none;
+  color: var(--accent);
+  font: inherit;
+  cursor: pointer;
+  padding: 0;
+  text-decoration: underline;
 }
 
 .card-status.warn-note {
