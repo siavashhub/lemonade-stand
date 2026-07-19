@@ -1,4 +1,5 @@
 import type {
+  ChatCompletionMessage,
   ChatCompletionMessageParam,
   ChatCompletionMessageToolCall,
   ChatCompletionTool
@@ -6,6 +7,7 @@ import type {
 import type { AgentEvent, ChatMessage, Napkin, NapkinChoice, PlanStep } from '@shared/types'
 import type { LemonadeClient } from '../lemonade/client'
 import type { McpManager } from '../mcp/manager'
+import { dirname } from 'path'
 
 // Asks the user to approve a single tool call. Resolves true to proceed, false
 // to skip. The main process implements this by prompting the renderer; a
@@ -195,6 +197,55 @@ const ASK_NAPKIN_TOOL_DEF: ChatCompletionTool = {
   }
 }
 
+// A model reply split into its optional chain-of-thought ("reasoning") and the
+// clean, user-facing answer.
+interface SplitReply {
+  reasoning: string
+  content: string
+}
+
+// Pull a model's chain-of-thought out of a completion message. Reasoning arrives
+// one of two ways: a non-standard `reasoning_content` (or `reasoning`) field
+// (DeepSeek / OGA style), or inline as a <think>...</think> block in the content.
+// Either way the returned `content` is the clean, user-facing text with any
+// <think> block stripped, so it's safe to feed back into the conversation.
+function splitReasoning(message: ChatCompletionMessage): SplitReply {
+  const rawContent = typeof message.content === 'string' ? message.content : ''
+  const extra = message as { reasoning_content?: unknown; reasoning?: unknown }
+  const field =
+    typeof extra.reasoning_content === 'string'
+      ? extra.reasoning_content
+      : typeof extra.reasoning === 'string'
+        ? extra.reasoning
+        : ''
+  if (field.trim()) {
+    return { reasoning: field.trim(), content: rawContent }
+  }
+  const match = rawContent.match(/<think>([\s\S]*?)<\/think>/i)
+  if (match) {
+    return {
+      reasoning: match[1].trim(),
+      content: rawContent.replace(/<think>[\s\S]*?<\/think>/gi, '').trim()
+    }
+  }
+  return { reasoning: '', content: rawContent }
+}
+
+// Return a copy of the assistant message safe to store in the model-facing
+// history: the chain-of-thought is stripped (both the inline <think> block and
+// any reasoning_content field) so it never re-enters the context window, while
+// tool_calls and the rest of the shape are preserved.
+function stripReasoningForHistory(
+  message: ChatCompletionMessage,
+  cleanContent: string
+): ChatCompletionMessageParam {
+  const copy = { ...(message as unknown as Record<string, unknown>) }
+  delete copy.reasoning_content
+  delete copy.reasoning
+  copy.content = cleanContent
+  return copy as unknown as ChatCompletionMessageParam
+}
+
 // Bounded tool-calling loop. Each user turn:
 //   1. ask lemond for a completion with the current MCP tool catalogue;
 //   2. if it returns tool_calls, execute each via the MCP manager, append the
@@ -202,6 +253,33 @@ const ASK_NAPKIN_TOOL_DEF: ChatCompletionTool = {
 //   3. otherwise emit the assistant text and finish.
 // `maxSteps` caps iterations so a misbehaving model or flaky tool server can't
 // spin forever.
+
+// Extract folder path from filesystem tool results. Returns the directory
+// containing the file that was created/written, or null if not detected.
+function extractFolderPathFromToolResult(
+  toolName: string,
+  result: string
+): string | null {
+  // Only match actual file write operations, NOT directory operations
+  const fileWriteTools = ['write_file', 'create_file', 'save_file', 'write']
+  const lowerName = toolName.toLowerCase()
+  if (!fileWriteTools.some((t) => lowerName.includes(t))) {
+    return null
+  }
+
+  // Try to extract a file path from the result text
+  // Look for patterns like "Wrote to /path/to/file.md" with file extensions
+  // This regex requires an actual file extension to avoid false matches
+  const pathMatch = result.match(/(?:Wrote to|File saved at|Written to|Successfully wrote to)[\s:]+([^\n]+\.[a-z0-9]+)/i)
+  if (pathMatch && pathMatch[1]) {
+    const filePath = pathMatch[1].trim()
+    // Return the directory containing the file
+    return dirname(filePath)
+  }
+
+  return null
+}
+
 export class Agent {
   constructor(
     private lemonade: LemonadeClient,
@@ -298,9 +376,19 @@ export class Agent {
           })
         }
 
-        const choice = await this.lemonade.chat(messages, tools, signal)
+        const choice = await this.lemonade.chat(messages, tools, signal, (delta) =>
+          emit({ type: 'reasoning_delta', text: delta })
+        )
         const message = choice.message
         const toolCalls = message.tool_calls ?? []
+        // Split off the chain-of-thought once, right after the completion and
+        // before any branch. Emitting the final `reasoning` here finalizes the
+        // live-streamed preview (collapsing its panel) for every path , including
+        // the dropped forced-plan and finish-nudge turns below , so a streamed
+        // thought never gets stranded open. `content` is the clean, user-facing
+        // text with any <think> block stripped, reused wherever we store history.
+        const { reasoning, content } = splitReasoning(message)
+        if (reasoning) emit({ type: 'reasoning', text: reasoning })
 
         // Final answer (no tool calls). If the model is trying to stop while its
         // plan still has unfinished steps (often after a mid-task compaction
@@ -320,8 +408,8 @@ export class Agent {
             })
             continue
           }
-          messages.push(message as ChatCompletionMessageParam)
-          emit({ type: 'assistant_text', text: message.content ?? '' })
+          messages.push(stripReasoningForHistory(message, content))
+          emit({ type: 'assistant_text', text: content })
           emit({ type: 'done' })
           return
         }
@@ -351,8 +439,10 @@ export class Agent {
         }
 
         // Record the assistant turn verbatim so tool results can reference its
-        // tool_call ids on the next iteration.
-        messages.push(message as ChatCompletionMessageParam)
+        // tool_call ids on the next iteration. The chain-of-thought (if any) was
+        // already surfaced above; it's stripped from the stored message so it
+        // never re-enters the model-facing context.
+        messages.push(stripReasoningForHistory(message, content))
 
         // Execute every requested call. A turn "did real work" if it invoked at
         // least one non-planning tool; a plan-only turn stays free.
@@ -742,6 +832,20 @@ export class Agent {
     } catch (err) {
       ok = false
       resultText = `Tool call failed: ${err instanceof Error ? err.message : String(err)}`
+    }
+
+    // If a filesystem tool succeeds, try to extract the folder path and show it
+    if (ok) {
+      const folderPath = extractFolderPathFromToolResult(toolLabel, resultText)
+      if (folderPath) {
+        const napkin: Napkin = {
+          title: `Files saved to ${folderPath.split(/[\\\\/]/).pop()}`,
+          kind: 'markdown',
+          content: `📂 **Saved to:** ${folderPath}\n\nClick the folder icon in the napkin header to open this location in explorer.`,
+          folderPath
+        }
+        emit({ type: 'napkin_show', napkin })
+      }
     }
 
     emit({

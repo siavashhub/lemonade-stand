@@ -21,7 +21,7 @@ tools.
 
 ## Prerequisites
 
-- Node.js 20+ (tested on 24).
+- Node.js 22.12+ (tested on 22.23 and 24).
 - A running `lemond` server. Note its base URL and port.
 
 ## Setup
@@ -30,6 +30,9 @@ tools.
 npm install
 Copy-Item .env.example .env
 ```
+
+If you switch Node versions (for example via `nvm`), run `npm install` again in
+this repo so native/binary dependencies are refreshed for the active runtime.
 
 Edit `.env` so `LEMONADE_BASE_URL` matches your server (include the `/api/v1`
 suffix), set `LEMONADE_MODEL` to a model your server can serve, and set
@@ -47,6 +50,8 @@ npm run typecheck  # type-check main + renderer
 npm run build      # production build into out/
 ```
 
+`npm run dev` automatically runs a pre-step that bootstraps Electron if needed.
+
 Hover the **Lemonade Stand** brand text to see the version `dev` in a local
 run, or the semantic version in an installed build. To use packaged installers, see the [release guide](docs/RELEASING.md).
 
@@ -63,6 +68,25 @@ docker run -d `
   ghcr.io/lemonade-sdk/lemonade-server:latest
 ```
 Otherwise you can download the server from Lemonade server it self: (https://github.com/lemonade-sdk/lemonade)
+
+## Troubleshooting
+
+- `TypeError: crypto.hash is not a function`
+  Use Node 22.12+ (or newer). This error appears when running with older Node
+  versions.
+- `Error: Electron uninstall`
+  Electron binary metadata was not bootstrapped yet for your current runtime.
+  Run:
+
+```powershell
+npm run predev
+```
+
+Then retry:
+
+```powershell
+npm run dev
+```
 
 ## Enabling tools (MCP servers)
 

@@ -1003,6 +1003,77 @@ body {
   font-size: 13px;
 }
 
+/* The model's chain-of-thought. Streams in expanded so you can watch it think,
+   then collapses to a one-line gist once the turn moves on. Kept compact , small
+   type, tight leading , and the body is capped to ~5 lines and auto-scrolls so a
+   long thought never balloons the transcript. */
+.line.reasoning {
+  align-self: flex-start;
+  max-width: 100%;
+  background: var(--tool);
+  border-left: 2px solid var(--muted);
+  border-radius: 4px;
+  padding: 3px 10px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.reasoning-summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  user-select: none;
+  list-style: none;
+  color: var(--muted);
+  font-style: italic;
+  letter-spacing: 0.02em;
+  line-height: 1.4;
+}
+
+.reasoning-summary::-webkit-details-marker {
+  display: none;
+}
+
+.reasoning-icon {
+  flex: 0 0 auto;
+  font-size: 13px;
+  opacity: 0.8;
+}
+
+.line.reasoning.streaming .reasoning-icon {
+  animation: reasoning-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes reasoning-pulse {
+  0%,
+  100% {
+    opacity: 0.4;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+.reasoning-gist {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.reasoning-body {
+  margin-top: 5px;
+  padding-top: 5px;
+  border-top: 1px solid var(--border);
+  white-space: pre-wrap;
+  line-height: 1.4;
+  font-size: 11px;
+  font-family: ui-monospace, 'Cascadia Code', Consolas, monospace;
+  /* ~5 lines tall, then scroll (keeping the latest lines in view). */
+  max-height: calc(11px * 1.4 * 5);
+  overflow-y: auto;
+}
+
 /* Live task plan/todo checklist emitted by the agent's update_plan tool. Shown
    inline and updated in place as the model works through the steps. */
 .line.plan {
@@ -1308,8 +1379,8 @@ body {
 
 .composer {
   display: flex;
+  flex-direction: column;
   gap: 8px;
-  align-items: center;
   padding: 12px;
   margin: 0 12px 16px;
   border: 1px solid var(--border);
@@ -1317,6 +1388,85 @@ body {
   background: var(--panel);
   box-shadow: 0 6px 24px -12px rgba(0, 0, 0, 0.45);
   overflow: hidden;
+}
+
+/* The input row: textarea plus mic/send buttons, side by side. */
+.composer-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+/* Highlight the composer while a file is dragged over it, signalling it as a
+   valid drop target. */
+.composer.dragover {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent) inset, 0 6px 24px -12px rgba(0, 0, 0, 0.45);
+}
+
+/* Chips for the files/images queued to send with the next message. */
+.composer .attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.attachment {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 220px;
+  padding: 4px 6px 4px 4px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg);
+  font-size: 12px;
+}
+
+.attachment-thumb {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  object-fit: cover;
+  flex-shrink: 0;
+}
+
+.attachment-icon {
+  font-size: 14px;
+  padding-left: 2px;
+}
+
+.attachment-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attachment-remove {
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--muted, var(--text));
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.attachment-remove:hover {
+  background: var(--border);
+  color: var(--text);
+}
+
+/* Attachment chips echoed inside a sent user message bubble. */
+.bubble-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 6px;
 }
 
 /* While the agent is working (or audio is transcribing) a thin accent beam
@@ -1813,6 +1963,31 @@ body {
   padding: 10px 16px;
   border-bottom: 1px solid var(--border);
   flex-wrap: wrap;
+}
+
+/* Free-text search box above the filter chips in the Models panel. */
+.models-search {
+  padding: 10px 16px 0;
+}
+
+.models-search-input {
+  width: 100%;
+  box-sizing: border-box;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 13px;
+}
+
+.models-search-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.models-search-input::placeholder {
+  color: var(--muted);
 }
 
 .filter-chip {
@@ -2474,7 +2649,8 @@ button.server-status:hover {
   flex: 0 0 auto;
 }
 
-.napkin-copy {
+.napkin-copy,
+.napkin-folder {
   border: 1px solid var(--border);
   background: var(--bg);
   color: var(--text);
@@ -2482,9 +2658,13 @@ button.server-status:hover {
   padding: 4px 10px;
   font-size: 12px;
   cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
-.napkin-copy:hover {
+.napkin-copy:hover,
+.napkin-folder:hover {
   border-color: var(--accent);
   color: var(--accent);
 }

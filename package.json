@@ -1,12 +1,13 @@
 {
   "name": "lemonade-stand",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "A desktop MCP client / agent host that drives local models served by Lemonade (lemond) over HTTP.",
   "author": "",
   "license": "Apache-2.0",
   "type": "module",
   "main": "./out/main/index.js",
   "scripts": {
+    "predev": "node -e \"require('electron')\"",
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "start": "electron-vite preview",

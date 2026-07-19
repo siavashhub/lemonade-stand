@@ -644,13 +644,16 @@ export class LemonadeClient {
       if (typeof entry?.recipe_options?.ctx_size === 'number') {
         this.cachedServerContext = entry.recipe_options.ctx_size
       }
+      // The user explicitly changed context from the UI. Honor that live choice
+      // for the current session even when an env/config override was present,
+      // so budget checks and warnings reflect what the server is now running.
+      this.contextOverride = undefined
       return {
         model: this.model,
         contextSize: this.cachedServerContext,
         maxContextWindow: this.cachedMaxContext,
         reserve: this.completionReserve,
-        // An override still wins for budgeting; report the true source.
-        source: this.contextOverride ? 'override' : 'server'
+        source: 'server'
       }
     } catch (err) {
       const info = await this.getContextInfo()
@@ -781,7 +784,8 @@ export class LemonadeClient {
   async chat(
     messages: ChatCompletionMessageParam[],
     tools: ChatCompletionTool[],
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    onReasoning?: (delta: string) => void
   ): Promise<OpenAI.Chat.Completions.ChatCompletion.Choice> {
     const stream = this.client.beta.chat.completions.stream(
       {
@@ -792,6 +796,27 @@ export class LemonadeClient {
       },
       { signal }
     )
+    // Accumulate the model's chain-of-thought ourselves. Reasoning models served
+    // by llama.cpp / OGA (e.g. Qwen3) stream their thinking in a non-standard
+    // `reasoning_content` (or `reasoning`) delta field. The OpenAI SDK's stream
+    // accumulator only *concatenates* the standard delta fields (content,
+    // tool_calls, ...); unknown fields are Object.assign'd, so each chunk
+    // OVERWRITES the previous , finalChatCompletion() would surface at most the
+    // last token. So we append the fragments here and reattach the full text to
+    // the final message below, where the agent loop's splitReasoning() reads it.
+    let reasoning = ''
+    stream.on('chunk', (chunk) => {
+      const delta = chunk.choices[0]?.delta as
+        | { reasoning_content?: unknown; reasoning?: unknown }
+        | undefined
+      if (typeof delta?.reasoning_content === 'string') {
+        reasoning += delta.reasoning_content
+        onReasoning?.(delta.reasoning_content)
+      } else if (typeof delta?.reasoning === 'string') {
+        reasoning += delta.reasoning
+        onReasoning?.(delta.reasoning)
+      }
+    })
     // If the caller aborts, tear the stream (and its socket) down immediately so
     // the server stops generating instead of running to completion unheard.
     const onAbort = (): void => stream.controller.abort()
@@ -800,6 +825,11 @@ export class LemonadeClient {
       const response = await stream.finalChatCompletion()
       const choice = response.choices[0]
       if (!choice) throw new Error('lemond returned no choices')
+      // Reattach our fully-accumulated reasoning (the SDK reassembly drops it).
+      // Authoritative: our concatenation is the complete text, so always prefer it.
+      if (reasoning.trim()) {
+        ;(choice.message as { reasoning_content?: string }).reasoning_content = reasoning
+      }
       return choice
     } finally {
       signal?.removeEventListener('abort', onAbort)
