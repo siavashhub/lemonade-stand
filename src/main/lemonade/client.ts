@@ -187,7 +187,7 @@ export class LemonadeClient {
       const models = body.all_models_loaded ?? []
       // Prefer the entry matching our configured chat model; otherwise fall back
       // to whatever LLM the server currently has loaded. Omni collections have
-      // no backend of their own — chat runs on a loaded LLM component — so the
+      // no backend of their own , chat runs on a loaded LLM component , so the
       // collection name never matches an LLM here; the loaded-LLM fallbacks
       // resolve context from that component instead of dropping to the default.
       return (
@@ -230,7 +230,7 @@ export class LemonadeClient {
   /**
    * List the models the server knows about, merged with which one is currently
    * loaded (from /health). A model is flagged `agentReady` when its labels
-   * advertise tool-calling — the capability the agent loop depends on.
+   * advertise tool-calling , the capability the agent loop depends on.
    */
   async listModels(): Promise<ModelInfo[]> {
     const controller = new AbortController()
@@ -253,7 +253,7 @@ export class LemonadeClient {
 
     // The default list only reports downloaded models. Omni router models
     // (recipe 'collection.omni') are usually not downloaded, so pull the full
-    // catalogue with show_all=true and merge in just the Omni entries — we want
+    // catalogue with show_all=true and merge in just the Omni entries , we want
     // to surface them for agentic use without flooding the list with every
     // supported model.
     try {
@@ -417,7 +417,7 @@ export class LemonadeClient {
   /**
    * Delete a downloaded model from local storage via the server's /delete. If
    * the model is currently loaded, the server unloads it first. Note: deleting
-   * an Omni collection removes only the collection entry — its component models
+   * an Omni collection removes only the collection entry , its component models
    * stay on disk (delete those individually to reclaim their space).
    */
   async deleteModel(id: string): Promise<{ ok: boolean; error?: string }> {
@@ -598,7 +598,7 @@ export class LemonadeClient {
     try {
       // Omni collections have no backend of their own: chat runs through the
       // server's collection orchestrator, which (re)loads each component from
-      // its *saved* recipe_options.json — a transient ctx_size sent to the
+      // its *saved* recipe_options.json , a transient ctx_size sent to the
       // collection is never forwarded to its parts. So target the loaded LLM
       // component directly and persist the size (save_options) so the next
       // collection turn doesn't reload the component back to its old default.
@@ -761,8 +761,8 @@ export class LemonadeClient {
    * reassembled result. This is deliberate and load-bearing for the stop
    * button: with a non-streamed request, aborting the fetch closes the socket,
    * but the OpenAI-compatible backend (llama.cpp / OGA) doesn't notice the
-   * client is gone until it writes the response — which never happens until the
-   * whole reply is generated — so it keeps the GPU/NPU busy to completion (the
+   * client is gone until it writes the response , which never happens until the
+   * whole reply is generated , so it keeps the GPU/NPU busy to completion (the
    * fan keeps spinning). Streaming makes the backend write a chunk per token,
    * so the dropped connection is detected on the next token and generation
    * stops promptly when the user hits stop.
@@ -898,7 +898,7 @@ export class LemonadeClient {
    * Synthesize speech via lemond's OpenAI-compatible /v1/audio/speech endpoint
    * (backed by Kokoro TTS). Returns base64-encoded audio bytes plus the format
    * so the renderer can wrap them in the right MIME type. `stream=true` isn't
-   * needed here — replies are short and we play them as one clip. The model id
+   * needed here , replies are short and we play them as one clip. The model id
    * is resolved against the server so a stale/renamed voice can't silently
    * break playback.
    */

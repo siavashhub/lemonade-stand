@@ -1,4 +1,4 @@
-# Lemonade Stand , User Guide
+# Lemonade Stand — User Guide
 
 Lemonade Stand is a desktop agent that runs a local model (served by `lemond`)
 and lets it call **tools** provided by **MCP servers**. You stock those tools
@@ -24,7 +24,7 @@ copy‑paste example prompts you can use to test each one.
 4. Restart if prompted.
 
 Under the hood this adds an entry to `config/servers.json`. You can also
-hand‑edit that file. **Only enable servers you trust**, their tools run with
+hand‑edit that file. **Only enable servers you trust** — their tools run with
 this app's privileges.
 
 ---
@@ -33,7 +33,7 @@ this app's privileges.
 
 Your local `lemond`'s own tools, exposed as agent tools: chat, "omni"
 multimodal, image generation, audio transcription, and model listing. No install
-needed , just point the entry's `url` at your server's `/mcp` endpoint and enable
+needed — just point the entry's `url` at your server's `/mcp` endpoint and enable
 it.
 
 **Tools:** `lemonade_list_models`, `lemonade_chat`, `lemonade_omni`,
@@ -48,12 +48,12 @@ it.
 - "Use `lemonade_omni` to describe what's in `C:\temp\lemonade-stand\photo.png`."
 
 > Note: the `/mcp` gateway is HTTP‑only and non‑streaming. TTS (spoken replies)
-> and embeddings are **not** gateway tools, the app calls those REST endpoints
+> and embeddings are **not** gateway tools — the app calls those REST endpoints
 > directly.
 
 ---
 
-## 2. Filesystem 📁 (`filesystem`)
+## 2. Filesystem 📁 (`filesystem`) — *already tested*
 
 Read and write files under a single root folder you choose. Great for letting the
 agent work with local documents and code.
@@ -93,7 +93,7 @@ PATH.
 
 ## 4. Git 🔀 (`git`)
 
-Inspect and operate on a local Git repository , status, diffs, log, and commits.
+Inspect and operate on a local Git repository — status, diffs, log, and commits.
 Requires `uvx`. When enabling, pick the **repository folder**.
 
 **Tools:** `git_status`, `git_diff_unstaged`, `git_diff_staged`, `git_diff`,
@@ -109,7 +109,7 @@ Requires `uvx`. When enabling, pick the **repository folder**.
 - "Show me the details of the most recent commit."
 
 > The commit/reset/checkout tools change your repo. The approval card lets you
-> review each action before it runs , deny anything you're unsure about.
+> review each action before it runs — deny anything you're unsure about.
 
 ---
 

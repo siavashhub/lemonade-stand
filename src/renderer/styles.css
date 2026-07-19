@@ -1,4 +1,4 @@
-/* Default (dark) theme — "Deep Teal". A light "Mint Stand" theme lives under
+/* Default (dark) theme , "Deep Teal". A light "Mint Stand" theme lives under
    [data-theme="light"] below; the top-bar toggle flips the attribute on <html>. */
 :root,
 :root[data-theme='dark'] {
@@ -79,7 +79,7 @@ body {
   font-size: 14px;
 }
 
-/* Custom scrollbar — replaces the default Windows chrome. */
+/* Custom scrollbar , replaces the default Windows chrome. */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
@@ -133,7 +133,7 @@ body {
   flex: 1 1 0;
   min-width: 0;
   /* Opt out of the drag region so the native title tooltip (app version) shows
-     on hover — Chromium suppresses tooltips over -webkit-app-region: drag. */
+     on hover , Chromium suppresses tooltips over -webkit-app-region: drag. */
   -webkit-app-region: no-drag;
 }
 
@@ -1348,7 +1348,7 @@ body {
   cursor: default;
 }
 
-/* Microphone / dictation button — sits between the textarea and the send
+/* Microphone / dictation button , sits between the textarea and the send
    lemon. Circular to match the send button, but understated until active. */
 .composer button.mic-btn {
   flex: 0 0 auto;

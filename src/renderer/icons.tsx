@@ -27,7 +27,7 @@ function Icon({ children, ...props }: IconProps & { children: JSX.Element }): JS
   )
 }
 
-// stop — halt an in-flight request (filled rounded square)
+// stop , halt an in-flight request (filled rounded square)
 export function StopIcon(props: IconProps): JSX.Element {
   return (
     <Icon {...props}>
@@ -36,7 +36,7 @@ export function StopIcon(props: IconProps): JSX.Element {
   )
 }
 
-// speaker-wave — spoken replies on
+// speaker-wave , spoken replies on
 export function SpeakerWaveIcon(props: IconProps): JSX.Element {
   return (
     <Icon {...props}>
@@ -48,7 +48,7 @@ export function SpeakerWaveIcon(props: IconProps): JSX.Element {
   )
 }
 
-// speaker with pause bars — shown while a spoken reply is playing; clicking it
+// speaker with pause bars , shown while a spoken reply is playing; clicking it
 // stops the speech. Keeps the speaker body but replaces the sound waves with
 // pause bars so it reads as "halt the voice" (distinct from the send-stop icon).
 export function StopSpeakingIcon(props: IconProps): JSX.Element {
@@ -62,7 +62,7 @@ export function StopSpeakingIcon(props: IconProps): JSX.Element {
   )
 }
 
-// speaker-x-mark — spoken replies off
+// speaker-x-mark , spoken replies off
 export function SpeakerXMarkIcon(props: IconProps): JSX.Element {
   return (
     <Icon {...props}>
@@ -74,7 +74,7 @@ export function SpeakerXMarkIcon(props: IconProps): JSX.Element {
   )
 }
 
-// cpu-chip — model selector
+// cpu-chip , model selector
 export function CpuChipIcon(props: IconProps): JSX.Element {
   return (
     <Icon {...props}>
@@ -83,7 +83,7 @@ export function CpuChipIcon(props: IconProps): JSX.Element {
   )
 }
 
-// archive-box — the Pantry
+// archive-box , the Pantry
 export function ArchiveBoxIcon(props: IconProps): JSX.Element {
   return (
     <Icon {...props}>
@@ -92,7 +92,7 @@ export function ArchiveBoxIcon(props: IconProps): JSX.Element {
   )
 }
 
-// microphone — dictate a message with the mic
+// microphone , dictate a message with the mic
 export function MicrophoneIcon(props: IconProps): JSX.Element {
   return (
     <Icon {...props}>
@@ -101,7 +101,7 @@ export function MicrophoneIcon(props: IconProps): JSX.Element {
   )
 }
 
-// clock — the conversation history sidebar
+// clock , the conversation history sidebar
 export function ClockIcon(props: IconProps): JSX.Element {
   return (
     <Icon {...props}>
@@ -110,7 +110,7 @@ export function ClockIcon(props: IconProps): JSX.Element {
   )
 }
 
-// arrow-down-tray — download a model to the server
+// arrow-down-tray , download a model to the server
 export function ArrowDownTrayIcon(props: IconProps): JSX.Element {
   return (
     <Icon {...props}>
@@ -119,7 +119,7 @@ export function ArrowDownTrayIcon(props: IconProps): JSX.Element {
   )
 }
 
-// trash — delete a saved conversation
+// trash , delete a saved conversation
 export function TrashIcon(props: IconProps): JSX.Element {
   return (
     <Icon {...props}>

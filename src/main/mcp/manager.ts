@@ -36,7 +36,7 @@ function cleanEnv(env: NodeJS.ProcessEnv): Record<string, string> {
 
 // Directories prepended to a stdio server's PATH so its launcher (uvx/uv) and
 // sibling tools resolve even when the app's own PATH is stale (e.g. uv was
-// installed after the app started) or the user never installed uv at all — in
+// installed after the app started) or the user never installed uv at all , in
 // packaged builds we ship uv under resources/bin (-> <resources>/bin).
 let cachedBinDirs: string[] | null = null
 function bundledBinDirs(): string[] {
@@ -176,7 +176,7 @@ export class McpManager {
     if (server.transport === 'stdio') {
       // resolveStdioLaunch augments PATH with our bundled uv (resources/bin)
       // and uv's user install dir, and reroutes npx launchers through
-      // Electron's built-in Node — so the uvx/npx toolchains don't need to be
+      // Electron's built-in Node , so the uvx/npx toolchains don't need to be
       // installed (or on a freshly-restarted PATH) for a server to start. The
       // MCP SDK otherwise spawns with a stripped env, which is why stdio servers
       // connect in `npm run dev` but silently fail in a packaged build. Config
@@ -252,7 +252,7 @@ export class McpManager {
     const result = await owner.client.callTool({ name: originalName, arguments: args })
 
     // Flatten MCP content blocks to text. Non-text blocks (image/audio) are
-    // summarized rather than inlined — this is a text agent loop; binary media
+    // summarized rather than inlined , this is a text agent loop; binary media
     // would blow up the context window.
     const blocks = Array.isArray(result.content) ? result.content : []
     const parts: string[] = []

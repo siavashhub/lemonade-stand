@@ -28,8 +28,8 @@ export type ContinueFn = (steps: number) => Promise<boolean>
 const MAX_PLAN_ONLY_STREAK = 8
 
 // Once a task has done this many real-work turns without ever planning, force a
-// single planning round-trip (Option B). Kept at 1 so the plan appears early —
-// as soon as the model takes a second action without a plan — while a task that
+// single planning round-trip (Option B). Kept at 1 so the plan appears early,
+// as soon as the model takes a second action without a plan, while a task that
 // finishes in a single tool call stays plan-free.
 const FORCE_PLAN_AFTER = 1
 
@@ -50,7 +50,7 @@ const MAX_PLAN_FINISH_NUDGES = 3
 const PLAN_TOOL = 'update_plan'
 
 // Schema for the built-in planning tool, appended to the MCP tool catalogue so
-// the model can optionally lay out — and revise — a short todo list for
+// the model can optionally lay out , and revise , a short todo list for
 // multi-step work. The model always sends the full list; statuses drive the
 // live checklist in the UI.
 const PLAN_TOOL_DEF: ChatCompletionTool = {
@@ -133,7 +133,7 @@ export class Agent {
       let limit = this.maxSteps
       let planOnlyStreak = 0
       // Whether the model has produced a plan this turn, and whether we've
-      // already forced one — so the Option-B nudge fires at most once.
+      // already forced one , so the Option-B nudge fires at most once.
       let hasPlanned = false
       let forcedPlan = false
       // The latest plan the model set, and how many times we've nudged it to
@@ -172,7 +172,7 @@ export class Agent {
               `This request needs about ${budget.estimatedTokens} tokens, but the model's ` +
               `context window is ${budget.contextSize} (usable ${budget.budget} after reserving ` +
               `${budget.reserve} for the reply). Shorten the conversation, disable some tools, ` +
-              `or raise the context — increase the server's context size or set LEMONADE_CONTEXT_SIZE.`
+              `or raise the context , increase the server's context size or set LEMONADE_CONTEXT_SIZE.`
           })
           emit({ type: 'done' })
           return
@@ -203,7 +203,7 @@ export class Agent {
               content:
                 `Your plan still has unfinished steps: ${unfinished
                   .map((s) => s.title)
-                  .join('; ')}. Keep working — actually perform each remaining step ` +
+                  .join('; ')}. Keep working , actually perform each remaining step ` +
                 `with the appropriate tool, updating the plan as you complete them, ` +
                 `and only give your final summary once every step is done.`
             })
@@ -226,8 +226,8 @@ export class Agent {
         // (one-tool-per-turn models), or (b) this single completion batches 2+
         // tool calls (models that request everything at once). A genuinely
         // single-step task never hits either, so trivial requests stay
-        // plan-free. We drop this un-planned turn — it was never pushed, so no
-        // orphaned tool_calls — and re-ask with a nudge so the model plans first.
+        // plan-free. We drop this un-planned turn , it was never pushed, so no
+        // orphaned tool_calls , and re-ask with a nudge so the model plans first.
         if (
           wantsRealWork &&
           !hasPlanned &&
@@ -257,14 +257,14 @@ export class Agent {
           if (planned) currentPlan = planned
         }
 
-        // The prompt grew by this turn's tool calls/results — refresh the badge.
+        // The prompt grew by this turn's tool calls/results , refresh the badge.
         await this.emitUsage(messages, tools, emit)
 
         if (didRealWork) {
           step++
           planOnlyStreak = 0
         } else {
-          // Free plan-only turn — but guard against a model that loops forever
+          // Free plan-only turn , but guard against a model that loops forever
           // revising its plan without ever acting on it.
           if (++planOnlyStreak >= MAX_PLAN_ONLY_STREAK) {
             emit({
@@ -430,8 +430,8 @@ export class Agent {
 
   /**
    * Emit the live per-category context usage for the current in-flight prompt so
-   * the renderer's usage badge reflects the real size — tool calls and results
-   * included — instead of just the committed chat history. Best-effort: a failed
+   * the renderer's usage badge reflects the real size , tool calls and results
+   * included , instead of just the committed chat history. Best-effort: a failed
    * estimate just skips this tick's update.
    */
   private async emitUsage(

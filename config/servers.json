@@ -1,5 +1,5 @@
 {
-  "$schema-note": "Configured MCP servers. Managed by the app's Pantry UI, but hand-editable too. `enabled: false` entries are ignored at startup. Two transports: 'stdio' (spawns a subprocess) and 'http' (Streamable HTTP). Only enable servers you trust — their tools run with this app's privileges. Browse more tools to add in config/catalog.json.",
+  "$schema-note": "Configured MCP servers. Managed by the app's Pantry UI, but hand-editable too. `enabled: false` entries are ignored at startup. Two transports: 'stdio' (spawns a subprocess) and 'http' (Streamable HTTP). Only enable servers you trust, their tools run with this app's privileges. Browse more tools to add in config/catalog.json.",
   "servers": [
     {
       "id": "lemonade",

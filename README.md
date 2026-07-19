@@ -47,7 +47,7 @@ npm run typecheck  # type-check main + renderer
 npm run build      # production build into out/
 ```
 
-Hover the **Lemonade Stand** brand text to see the version — `dev` in a local
+Hover the **Lemonade Stand** brand text to see the version `dev` in a local
 run, or the semantic version in an installed build. To use packaged installers, see the [release guide](docs/RELEASING.md).
 
 ### Lemonade Server Run
@@ -67,7 +67,7 @@ Otherwise you can download the server from Lemonade server it self: (https://git
 ## Enabling tools (MCP servers)
 
 Edit `config/servers.json`. Each entry is `stdio` (spawns a subprocess) or
-`http` (Streamable HTTP). Entries are **disabled by default** — only enable
+`http` (Streamable HTTP). Entries are **disabled by default**. Only enable
 servers you trust, since their tools run with this app's privileges.
 
 To let the agent use Lemonade's own capabilities as tools, set the `lemonade`

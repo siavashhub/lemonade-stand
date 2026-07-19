@@ -2,7 +2,7 @@ import { readFileSync, writeFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import type { CatalogEntry, McpServerConfig } from '@shared/types'
 
-// Minimal .env loader — avoids a dependency. Parses KEY=VALUE lines, ignores
+// Minimal .env loader, avoids a dependency. Parses KEY=VALUE lines, ignores
 // comments/blank lines, and does not override variables already in the real
 // environment (so OS-level env wins, matching Lemonade's own key handling).
 function loadDotEnv(cwd: string): void {
@@ -80,7 +80,7 @@ export function loadConfig(cwd: string = process.cwd()): AppConfig {
 
   // Values the user sets in the app's UI (model, server connection) are
   // remembered across restarts in settings.json. A UI choice is explicit, so it
-  // takes priority over the matching env var — which acts only as the *initial*
+  // takes priority over the matching env var, which acts only as the *initial*
   // default before the user has ever chosen one. Precedence for each:
   // saved choice, then env default, then the built-in default.
   const saved = readSettings(cwd)

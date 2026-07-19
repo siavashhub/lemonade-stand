@@ -90,7 +90,7 @@ function bytesToBase64(bytes: Uint8Array): string {
 
 // Lemonade's /audio/transcriptions endpoint only accepts WAV, but the browser's
 // MediaRecorder emits WebM/Opus. Decode the recording and re-encode it as a
-// 16 kHz mono 16-bit PCM WAV — the format Whisper wants — so the server can read
+// 16 kHz mono 16-bit PCM WAV , the format Whisper wants , so the server can read
 // it. Returns the WAV bytes.
 async function blobToWavBytes(blob: Blob): Promise<Uint8Array> {
   const AudioCtx: typeof AudioContext =
@@ -182,7 +182,7 @@ function describeOmni(model: ModelInfo): string {
   const persona = model.systemPrompt?.trim()
   if (persona) {
     const short = persona.length > 140 ? persona.slice(0, 137) + '…' : persona
-    return `Omni router — ${short}`
+    return `Omni router , ${short}`
   }
   const parts = model.components ?? []
   if (parts.length > 0) {
@@ -192,7 +192,7 @@ function describeOmni(model: ModelInfo): string {
     )
   }
   return (
-    'Omni router — loads several models together (chat + image + speech + ' +
+    'Omni router , loads several models together (chat + image + speech + ' +
     'transcription) and routes each request to the right one.'
   )
 }
@@ -229,7 +229,7 @@ export function App(): JSX.Element {
   const [compacting, setCompacting] = useState(false)
   // Exactly one overlay (popover or modal) can be open at a time. Opening any
   // panel replaces whatever was showing, so clicking a second control always
-  // dismisses the first — no stacking of windows on top of each other.
+  // dismisses the first , no stacking of windows on top of each other.
   const [activePanel, setActivePanel] = useState<Panel | null>(null)
   const togglePanel = (p: Panel): void => setActivePanel((cur) => (cur === p ? null : p))
   const closePanel = (): void => setActivePanel(null)
@@ -310,7 +310,7 @@ export function App(): JSX.Element {
       } else {
         setEntries((e) => [
           ...e,
-          { kind: 'warning', text: 'Nothing to compact yet — the conversation is still short.' }
+          { kind: 'warning', text: 'Nothing to compact yet , the conversation is still short.' }
         ])
       }
       closePanel()
@@ -472,7 +472,7 @@ export function App(): JSX.Element {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [history, busy, context?.contextSize, tools.length])
 
-  // While the agent is working — or audio is being transcribed — cycle a fresh
+  // While the agent is working , or audio is being transcribed , cycle a fresh
   // playful phrase. The first phrase is picked when the work starts; subsequent
   // phrases are advanced by the lemon's squeeze finishing (see onAnimationEnd
   // below), so the text swap stays in sync with the animation.
@@ -560,8 +560,8 @@ export function App(): JSX.Element {
 
   // Persistent listener for synthesized speech. TTS is fire-and-forget in the
   // main process, so the 'audio' event often arrives *after* the per-turn
-  // handler in send() has already torn down on 'done'. Handling it here — for
-  // the app's lifetime — means late audio still plays instead of being dropped.
+  // handler in send() has already torn down on 'done'. Handling it here , for
+  // the app's lifetime , means late audio still plays instead of being dropped.
   useEffect(() => {
     const off = window.api.onAgentEvent((event: AgentEvent) => {
       if (event.type !== 'audio') return
@@ -694,8 +694,8 @@ export function App(): JSX.Element {
     else void startRecording()
   }
 
-  // Halt whatever the send lemon is currently busy with — an in-flight agent
-  // turn or an audio transcription — so the user can immediately start over.
+  // Halt whatever the send lemon is currently busy with , an in-flight agent
+  // turn or an audio transcription , so the user can immediately start over.
   function stop(): void {
     if (busy) window.api.cancelMessage()
     if (transcribing) {
@@ -743,7 +743,7 @@ export function App(): JSX.Element {
         // model works through the steps.
         setPlan(event.steps)
       } else if (event.type === 'context_usage') {
-        // Live in-flight prompt size (tool calls/results included) — keep the
+        // Live in-flight prompt size (tool calls/results included) , keep the
         // usage badge honest while the agent works, not just between turns.
         setBreakdown(event.breakdown)
       } else if (event.type === 'tool_approval_request') {
@@ -756,7 +756,7 @@ export function App(): JSX.Element {
       } else if (event.type === 'context_warning') {
         const usable = event.contextSize - event.reserve
         const text = event.overflow
-          ? `Request too large: ~${event.estimatedTokens} tokens exceed the usable ${usable} of ${event.contextSize} (reserving ${event.reserve} for the reply). It was not sent — shorten the chat, disable tools, or raise the context size.`
+          ? `Request too large: ~${event.estimatedTokens} tokens exceed the usable ${usable} of ${event.contextSize} (reserving ${event.reserve} for the reply). It was not sent , shorten the chat, disable tools, or raise the context size.`
           : `Heads up: this request is ~${event.estimatedTokens} tokens, close to the usable ${usable}-token limit (context ${event.contextSize}).`
         setEntries((e) => [...e, { kind: 'warning', text }])
       } else if (event.type === 'history_compacted') {
@@ -857,7 +857,7 @@ export function App(): JSX.Element {
           <button
             className="pantry-toggle pantry-toggle-primary"
             onClick={() => setActivePanel('pantry')}
-            title={`Open the Pantry — stock tools & skills (${tools.length} tool${
+            title={`Open the Pantry , stock tools & skills (${tools.length} tool${
               tools.length === 1 ? '' : 's'
             } connected)`}
           >
@@ -1080,7 +1080,7 @@ export function App(): JSX.Element {
                 (serverStatus === 'online'
                   ? 'Lemonade server is running'
                   : serverStatus === 'offline'
-                    ? 'Lemonade server is unreachable — start lemond to chat'
+                    ? 'Lemonade server is unreachable , start lemond to chat'
                     : 'Checking Lemonade server…') + '\nClick to configure the connection'
               }
             >
@@ -1866,7 +1866,7 @@ function ModelCard({
         )}
         {!model.agentReady && model.type === 'llm' && (
           <div className="card-status warn-note">
-            No tool-calling label — may not reliably call tools in the agent loop.
+            No tool-calling label , may not reliably call tools in the agent loop.
           </div>
         )}
       </div>
@@ -2187,7 +2187,7 @@ function Pantry({
         </div>
 
         <footer className="pantry-foot">
-          Only stock tools you trust — their actions run with this app's privileges.
+          Only stock tools you trust , their actions run with this app's privileges.
         </footer>
       </aside>
     </div>
@@ -2203,7 +2203,7 @@ function ServerStatusRow({ state }: { state: McpServerState | undefined }): JSX.
         ● Stocked · {state.toolCount} tool{state.toolCount === 1 ? '' : 's'}
       </div>
     )
-  return <div className="card-status">Enabled — connecting…</div>
+  return <div className="card-status">Enabled , connecting…</div>
 }
 
 function PantryCard({

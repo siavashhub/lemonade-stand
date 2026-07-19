@@ -6,10 +6,10 @@ dist/
 .DS_Store
 
 # Bundled runtime binaries (uv/uvx) downloaded at build time by
-# scripts/fetch-uv.mjs — platform-specific, never committed.
+# scripts/fetch-uv.mjs, platform-specific, never committed.
 resources/bin/
 
-# Local runtime config that may contain endpoints/keys — never commit.
+# Local runtime config that may contain endpoints/keys, never commit.
 .env
 config/servers.local.json
 

@@ -7,7 +7,7 @@ import type {
 } from '@shared/types'
 
 // The only bridge between the sandboxed renderer and the Node-privileged main
-// process. Keep this surface small and explicit — the renderer can do nothing
+// process. Keep this surface small and explicit , the renderer can do nothing
 // the methods below don't allow.
 const api: RendererApi = {
   // Read from the --app-debug=<0|1> argument injected via webPreferences

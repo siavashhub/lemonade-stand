@@ -248,7 +248,7 @@ export type AgentEvent =
   | { type: 'plan_updated'; steps: PlanStep[] }
   // Live per-category context usage for the in-flight turn, so the usage badge
   // reflects the real prompt size (including tool calls/results) while the agent
-  // works — not just the committed chat history.
+  // works , not just the committed chat history.
   | { type: 'context_usage'; breakdown: ContextBreakdown }
   // The agent used up its step budget without finishing. Main is blocked
   // awaiting the user's choice; the renderer must call respondStepLimit(id, ...)

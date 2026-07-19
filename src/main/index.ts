@@ -33,7 +33,7 @@ const __dirname = fileURLToPath(new URL('.', import.meta.url))
 // servers, settings). In development that's the project root. In a packaged
 // build the bundled defaults ship read-only under `process.resourcesPath/config`
 // (see electron-builder.yml `extraResources`), while the app must also *write*
-// to servers.json / settings.json — so on first run we seed those defaults into
+// to servers.json / settings.json, so on first run we seed those defaults into
 // a writable per-user directory and read/write there afterwards. This fixes a
 // packaged app starting empty (no Pantry catalogue, no configured servers)
 // because it was looking for `config/` inside the read-only asar.
@@ -543,7 +543,7 @@ app.whenReady().then(async () => {
 
   // Ensure the active model is loaded at our default context so the budget
   // doesn't revert to the small server fallback after a restart. Best-effort
-  // and non-blocking — the window is already up.
+  // and non-blocking, the window is already up.
   void lemonade
     .ensureModelLoaded()
     .then(() => console.log(`[config] active chat model on server: ${lemonade.activeModel}`))
