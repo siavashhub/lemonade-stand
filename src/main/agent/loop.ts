@@ -260,15 +260,17 @@ function extractFolderPathFromToolResult(
   toolName: string,
   result: string
 ): string | null {
-  // Match filesystem-related tools and try to extract file paths
-  const filesystemTools = ['write_file', 'create_file', 'save_file', 'write', 'create']
-  if (!filesystemTools.some((t) => toolName.toLowerCase().includes(t))) {
+  // Only match actual file write operations, NOT directory operations
+  const fileWriteTools = ['write_file', 'create_file', 'save_file', 'write']
+  const lowerName = toolName.toLowerCase()
+  if (!fileWriteTools.some((t) => lowerName.includes(t))) {
     return null
   }
 
   // Try to extract a file path from the result text
-  // Look for patterns like "Wrote to /path/to/file" or "File saved at /path/to/file"
-  const pathMatch = result.match(/(?:Wrote to|File saved at|Created|Written to)[\s:]+([^\n]+(?:\.[a-z0-9]+)?)/i)
+  // Look for patterns like "Wrote to /path/to/file.md" with file extensions
+  // This regex requires an actual file extension to avoid false matches
+  const pathMatch = result.match(/(?:Wrote to|File saved at|Written to|Successfully wrote to)[\s:]+([^\n]+\.[a-z0-9]+)/i)
   if (pathMatch && pathMatch[1]) {
     const filePath = pathMatch[1].trim()
     // Return the directory containing the file
