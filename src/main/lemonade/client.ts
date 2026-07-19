@@ -233,29 +233,37 @@ export class LemonadeClient {
    * advertise tool-calling , the capability the agent loop depends on.
    */
   async listModels(): Promise<ModelInfo[]> {
-    const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(), 5000)
-    let entries: ModelsEntry[] = []
+    // 1. The plain /models list reports only *downloaded* models. We use it as
+    //    the authoritative "is this on disk?" signal, since the full catalogue
+    //    (below) can under-report downloaded state for pointer-based Omni
+    //    collections whose components are already present.
+    const downloadedIds = new Set<string>()
+    let downloadedEntries: ModelsEntry[] = []
     try {
-      const response = await fetch(`${this.baseURL}/models`, {
-        method: 'GET',
-        signal: controller.signal
-      })
-      if (response.ok) {
-        const body = (await response.json()) as { data?: ModelsEntry[] }
-        entries = body.data ?? []
+      const controller = new AbortController()
+      const timer = setTimeout(() => controller.abort(), 5000)
+      try {
+        const response = await fetch(`${this.baseURL}/models`, {
+          method: 'GET',
+          signal: controller.signal
+        })
+        if (response.ok) {
+          const body = (await response.json()) as { data?: ModelsEntry[] }
+          downloadedEntries = body.data ?? []
+          for (const e of downloadedEntries) if (e.id) downloadedIds.add(e.id)
+        }
+      } finally {
+        clearTimeout(timer)
       }
     } catch {
-      // Server unreachable -> return an empty list; the UI shows an empty state.
-    } finally {
-      clearTimeout(timer)
+      // Server unreachable -> handled below; the UI shows an empty state.
     }
 
-    // The default list only reports downloaded models. Omni router models
-    // (recipe 'collection.omni') are usually not downloaded, so pull the full
-    // catalogue with show_all=true and merge in just the Omni entries , we want
-    // to surface them for agentic use without flooding the list with every
-    // supported model.
+    // 2. The full catalogue (show_all=true) is the source of truth for *which*
+    //    models to display, so not-yet-downloaded models , and models the user
+    //    just uninstalled , stay visible with a Download button instead of
+    //    vanishing from the list.
+    let entries: ModelsEntry[] = []
     try {
       const controllerAll = new AbortController()
       const timerAll = setTimeout(() => controllerAll.abort(), 5000)
@@ -266,17 +274,17 @@ export class LemonadeClient {
         })
         if (response.ok) {
           const body = (await response.json()) as { data?: ModelsEntry[] }
-          const known = new Set(entries.map((e) => e.id))
-          for (const e of body.data ?? []) {
-            if (e.recipe === 'collection.omni' && !known.has(e.id)) entries.push(e)
-          }
+          entries = body.data ?? []
         }
       } finally {
         clearTimeout(timerAll)
       }
     } catch {
-      // Best-effort; if this fails we simply don't surface undownloaded Omni.
+      // Best-effort; fall back to the downloaded-only list below.
     }
+    // If the full catalogue couldn't be fetched, fall back to whatever the
+    // downloaded-only list returned so the picker still works offline-ish.
+    if (entries.length === 0) entries = downloadedEntries
 
     // Which model ids are currently loaded, per /health.
     const loaded = new Set<string>()
@@ -324,7 +332,10 @@ export class LemonadeClient {
         labels,
         maxContextWindow: e.max_context_window,
         sizeGb: e.size,
-        downloaded: e.downloaded ?? false,
+        // Trust the authoritative downloaded-only list first; the full catalogue
+        // can report a pointer Omni collection as not-downloaded even when its
+        // components are already on disk.
+        downloaded: (e.id ? downloadedIds.has(e.id) : false) || (e.downloaded ?? false),
         loaded: e.id ? loaded.has(e.id) : false,
         agentReady: labels.includes('tool-calling') || omni,
         omni,

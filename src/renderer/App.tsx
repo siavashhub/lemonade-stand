@@ -1981,6 +1981,13 @@ function ModelCard({
             className={model.active ? 'btn-off' : 'btn-on'}
             disabled={busy || model.active}
             onClick={onLoad}
+            title={
+              model.active
+                ? 'This is the active chat model'
+                : model.loaded
+                  ? 'Already loaded in server memory — switch to it instantly'
+                  : 'Load this model into server memory (takes a moment)'
+            }
           >
             {busy ? 'Loading…' : model.active ? 'Active' : model.loaded ? 'Use' : 'Load'}
           </button>
