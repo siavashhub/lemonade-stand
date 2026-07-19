@@ -7,10 +7,10 @@ release. Releases use [Semantic Versioning](https://semver.org): `MAJOR.MINOR.PA
 
 Hover the **Lemonade Stand** brand text in the top bar to see the version:
 
-- **`dev`** — a local development run (`npm run dev`) or an unpackaged preview.
+- **`dev`**: a local development run (`npm run dev`) or an unpackaged preview.
   The app detects this via Electron's `app.isPackaged` and never claims a
   version it wasn't released as.
-- **`vX.Y.Z`** — an installed/packaged build. The value comes from the `version`
+- **`vX.Y.Z`**: an installed/packaged build. The value comes from the `version`
   field in [`package.json`](../package.json), which is baked into the installer
   by `electron-builder`.
 
@@ -26,7 +26,7 @@ things:
 
 1. `package.json` `version` is a valid semantic version.
 2. `releases/vX.Y.Z.md` exists and is non-empty.
-3. If a tag is supplied, it equals `vX.Y.Z` — so the tag, the package version and
+3. If a tag is supplied, it equals `vX.Y.Z`, so the tag, the package version and
    the notes file can never drift apart.
 
 The gate runs both locally (`npm run check-release`) and as the first CI job, so
@@ -52,7 +52,7 @@ When ready to create a cut follow below:
 ### 1. Bump the version
 
 Update `version` in `package.json` to the new semantic version (e.g. `0.2.0`).
-You can do it by hand or with npm (which also creates a matching git tag —
+You can do it by hand or with npm (which also creates a matching git tag,
 remove `--git-tag-version` if you'd rather tag manually):
 
 ```powershell
@@ -69,7 +69,7 @@ Copy the template and fill it in. The filename **must** be `v<version>.md`:
 
 ```powershell
 Copy-Item releases/TEMPLATE.md releases/v0.2.0.md
-# edit releases/v0.2.0.md — this text becomes the GitHub Release body
+# edit releases/v0.2.0.md, this text becomes the GitHub Release body
 ```
 
 ### 3. Validate locally (the gate)
@@ -111,16 +111,16 @@ If you needed to update a tag, you have to delete it first with git tag -d <tag_
 
 Pushing the `v*` tag triggers [`.github/workflows/release.yml`](../.github/workflows/release.yml):
 
-1. **gate** — runs `check-release.mjs "<tag>"` and a type-check.
-2. **audit** — scans npm dependencies with `npm audit` and fails on any
+1. **gate**: runs `check-release.mjs "<tag>"` and a type-check.
+2. **audit**: scans npm dependencies with `npm audit` and fails on any
    high/critical advisory.
-3. **build** — packages installers on Windows, macOS, and Linux in parallel.
-4. **release** — creates the GitHub Release named after the tag, using
+3. **build**: packages installers on Windows, macOS, and Linux in parallel.
+4. **release**: creates the GitHub Release named after the tag, using
    `releases/<tag>.md` as the body, and attaches every installer.
 
 Both **gate** and **audit** must pass before any build runs. If either fails
 (missing notes, tag mismatch, or a vulnerable dependency), no build runs and no
-release is created — fix the issue, then retag.
+release is created, fix the issue, then retag.
 
 > A vulnerability found here means a dependency needs updating. Run
 > `npm audit fix` (or bump the offending package), commit, and retag.

@@ -1,4 +1,4 @@
-/* Default (dark) theme — "Deep Teal". A light "Mint Stand" theme lives under
+/* Default (dark) theme , "Deep Teal". A light "Mint Stand" theme lives under
    [data-theme="light"] below; the top-bar toggle flips the attribute on <html>. */
 :root,
 :root[data-theme='dark'] {
@@ -79,7 +79,7 @@ body {
   font-size: 14px;
 }
 
-/* Custom scrollbar — replaces the default Windows chrome. */
+/* Custom scrollbar , replaces the default Windows chrome. */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
@@ -132,9 +132,9 @@ body {
      centered regardless of how wide each side is. */
   flex: 1 1 0;
   min-width: 0;
-  /* Opt out of the drag region so the native title tooltip (app version) shows
-     on hover — Chromium suppresses tooltips over -webkit-app-region: drag. */
-  -webkit-app-region: no-drag;
+  /* Stay part of the window drag region so the empty space around the logo/title
+     drags the window. Only the interactive hamburger (.brand-menu-wrap) opts out. */
+  -webkit-app-region: drag;
 }
 
 .brand-logo {
@@ -142,6 +142,90 @@ body {
   height: 22px;
   flex: 0 0 auto;
   display: block;
+}
+
+/* Hamburger button + menu next to the app title. */
+.brand-menu-wrap {
+  position: relative;
+  flex: 0 0 auto;
+  -webkit-app-region: no-drag;
+}
+
+.hamburger-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 5px 8px;
+  cursor: pointer;
+  line-height: 1;
+}
+
+.hamburger-btn:hover {
+  border-color: var(--accent);
+}
+
+.brand-menu-popover {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  min-width: 180px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+  z-index: 60;
+}
+
+.brand-menu-label {
+  display: block;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  opacity: 0.6;
+  padding: 4px 8px;
+}
+
+.brand-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  border-radius: 6px;
+  padding: 6px 8px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.brand-menu-item:hover {
+  background: var(--bg);
+}
+
+.brand-menu-item.active {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.brand-menu-divider {
+  height: 1px;
+  margin: 6px 4px;
+  background: var(--border);
+}
+
+.brand-menu-version {
+  padding: 2px 8px 4px;
+  font-size: 11px;
+  opacity: 0.6;
 }
 
 /* The center cluster holds the primary session actions (New Session, History)
@@ -633,6 +717,27 @@ body {
   }
 }
 
+.bypass-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 5px 8px;
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+}
+
+/* When bypassing approvals, warn with the danger colour so the relaxed guard
+   is obvious at a glance. */
+.bypass-toggle.on {
+  border-color: var(--danger, #d9534f);
+  color: var(--danger, #d9534f);
+}
+
 .pantry-toggle {
   display: inline-flex;
   align-items: center;
@@ -718,6 +823,39 @@ body {
   font-weight: 600;
   line-height: 1.4;
   cursor: pointer;
+  position: relative;
+  overflow: hidden;
+}
+
+/* Model download / loading state on the status-bar Models button. */
+.statusbar-btn.is-downloading,
+.statusbar-btn.is-loading {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+/* Small "↓ 45%" / "loading…" pill appended to the Models button. */
+.statusbar-tag {
+  border-radius: 999px;
+  padding: 0 6px;
+  font-size: 10px;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+
+.statusbar-btn.is-loading .statusbar-tag {
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
+/* Thin progress fill along the bottom edge of the Models button. */
+.statusbar-progress {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  height: 2px;
+  background: var(--accent);
+  transition: width 0.3s ease;
 }
 
 .statusbar-btn svg {
@@ -732,6 +870,12 @@ body {
 /* The footer speaker toggle is smaller than the top-bar variant to sit neatly
    inline with the text-sized status controls around it. */
 .statusbar-right .speak-toggle {
+  font-size: 14px;
+  padding: 3px 7px;
+}
+
+/* Match the footer approval-bypass toggle to the speaker toggle's footer size. */
+.statusbar-right .bypass-toggle {
   font-size: 14px;
   padding: 3px 7px;
 }
@@ -1348,7 +1492,7 @@ body {
   cursor: default;
 }
 
-/* Microphone / dictation button — sits between the textarea and the send
+/* Microphone / dictation button , sits between the textarea and the send
    lemon. Circular to match the send button, but understated until active. */
 .composer button.mic-btn {
   flex: 0 0 auto;
@@ -1662,8 +1806,107 @@ body {
   font-size: 11px !important;
 }
 
+/* Quick-access filter chips at the top of the Models panel. */
+.models-filters {
+  display: flex;
+  gap: 8px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+
+.filter-chip {
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--muted);
+  border-radius: 999px;
+  padding: 4px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.filter-chip:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.filter-chip.on {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on-accent);
+}
+
+/* Inline text button used in empty states (e.g. "Show all"). */
+.link-inline {
+  background: none;
+  border: none;
+  color: var(--accent);
+  font: inherit;
+  cursor: pointer;
+  padding: 0;
+  text-decoration: underline;
+}
+
 .card-status.warn-note {
   color: #f5c542;
+}
+
+/* Download-size badge on not-yet-downloaded models. */
+.badge.size {
+  border-color: var(--accent);
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Live download / model-loading progress inside a model card. */
+.dl-progress {
+  margin-top: 10px;
+}
+
+.dl-bar {
+  height: 6px;
+  border-radius: 999px;
+  background: var(--border);
+  overflow: hidden;
+}
+
+.dl-fill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 999px;
+  transition: width 0.3s ease;
+}
+
+.dl-fill.paused {
+  background: var(--muted);
+}
+
+/* Indeterminate variant used while a model is loading into memory: a sliver
+   sweeps across so the user can see the system is working, not stuck. */
+.dl-bar.indeterminate .dl-fill {
+  width: 35%;
+  transition: none;
+  animation: dl-sweep 1.2s ease-in-out infinite;
+}
+
+@keyframes dl-sweep {
+  0% {
+    margin-left: -35%;
+  }
+  100% {
+    margin-left: 100%;
+  }
+}
+
+.dl-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 5px;
+  font-size: 11px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
 }
 
 .models-ctx {
@@ -1726,6 +1969,10 @@ body {
   cursor: pointer;
   border: 1px solid var(--border);
   white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
 }
 
 .btn-on {
@@ -1747,6 +1994,17 @@ body {
 .btn-remove:hover {
   border-color: #e05a5a;
   color: #e05a5a;
+}
+
+.btn-danger {
+  background: #e05a5a;
+  border-color: #e05a5a;
+  color: #fff;
+}
+
+.btn-danger:hover {
+  background: #d24747;
+  border-color: #d24747;
 }
 
 .card-actions button:disabled {
@@ -1821,11 +2079,32 @@ button.server-status:hover {
 
 .history-list {
   flex: 1;
-  overflow-y: auto;
-  padding: 10px 12px 16px;
+  overflow-y: scroll;
+  padding: 14px 12px 18px;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 12px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+
+.history-list::-webkit-scrollbar {
+  width: 10px;
+}
+
+.history-list::-webkit-scrollbar-track {
+  background: transparent;
+  margin: 4px 0;
+}
+
+.history-list::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 8px;
+  border: 2px solid var(--panel);
+}
+
+.history-list::-webkit-scrollbar-thumb:hover {
+  background: var(--muted);
 }
 
 .history-search {
@@ -1910,27 +2189,36 @@ button.server-status:hover {
   display: flex;
   align-items: stretch;
   gap: 6px;
+  flex-shrink: 0;
   border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--bg);
+  border-radius: 10px;
+  background: var(--panel);
   overflow: hidden;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.15);
+  transition: border-color 0.12s ease, box-shadow 0.12s ease;
+}
+
+.history-item:hover {
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
 }
 
 .history-item.active {
   border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
 }
 
 .history-open {
   flex: 1;
+  min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 5px;
   align-items: flex-start;
   text-align: left;
   background: transparent;
   border: none;
   color: var(--text);
-  padding: 9px 11px;
+  padding: 12px 14px;
   cursor: pointer;
 }
 
@@ -1942,11 +2230,14 @@ button.server-status:hover {
   font-weight: 600;
   font-size: 13px;
   line-height: 1.3;
+  overflow-wrap: anywhere;
+  width: 100%;
 }
 
 .history-meta {
   color: var(--muted);
   font-size: 11px;
+  line-height: 1.4;
 }
 
 .history-del {
@@ -1965,3 +2256,659 @@ button.server-status:hover {
   color: #e05a5a;
   background: var(--panel);
 }
+
+/* --- Pitchers (scheduled tasks) ------------------------------------------- */
+
+.history-item.disabled {
+  opacity: 0.6;
+}
+
+.pantry-add {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: #1a1a1a;
+  border-radius: 6px;
+  padding: 6px 12px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.pantry-add:hover {
+  filter: brightness(1.05);
+}
+
+.pantry-add:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.pitcher-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 14px;
+  overflow-y: auto;
+}
+
+.pitcher-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.pitcher-field > input,
+.pitcher-field > textarea,
+.pitcher-field > select,
+.pitcher-row > input,
+.pitcher-row > select {
+  box-sizing: border-box;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 13px;
+  font-weight: 400;
+  font-family: inherit;
+}
+
+.pitcher-field > input:focus,
+.pitcher-field > textarea:focus,
+.pitcher-field > select:focus,
+.pitcher-row > input:focus,
+.pitcher-row > select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.pitcher-field > textarea {
+  resize: vertical;
+}
+
+.pitcher-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.pitcher-hint {
+  font-weight: 400;
+  font-style: normal;
+  color: var(--muted);
+  opacity: 0.8;
+}
+
+.pitcher-search {
+  box-sizing: border-box;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 13px;
+  font-weight: 400;
+  font-family: inherit;
+}
+
+.pitcher-search:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.pitcher-tools {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 180px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px;
+  background: var(--bg);
+}
+
+.pitcher-tool {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.pitcher-tool-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pitcher-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+/* --- The Napkin (rich artifact side panel) -------------------------------- */
+
+/* The chat column and the napkin dock sit side by side below the top bar. */
+.stage {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  position: relative;
+}
+
+.chat-col {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+.napkin-panel {
+  width: min(480px, 46vw);
+  min-width: 300px;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  border-left: 1px solid var(--border);
+  box-shadow: -12px 0 40px -24px rgba(0, 0, 0, 0.5);
+  animation: napkin-drawer 0.5s cubic-bezier(0.7, 0, 0.3, 1);
+}
+
+@keyframes napkin-drawer {
+  from {
+    clip-path: inset(0 100% 0 0);
+    opacity: 0;
+  }
+  to {
+    clip-path: inset(0 0 0 0);
+    opacity: 1;
+  }
+}
+
+.napkin-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.napkin-head-titles {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
+
+.napkin-brand {
+  font-weight: 600;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.napkin-title {
+  color: var(--muted);
+  font-size: 12.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.napkin-head-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.napkin-copy {
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.napkin-copy:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.napkin-body {
+  flex: 1;
+  overflow: auto;
+  padding: 14px;
+}
+
+.napkin-empty {
+  color: var(--muted);
+  font-size: 13px;
+  text-align: center;
+  margin-top: 24px;
+}
+
+/* Code artifact */
+.napkin-code {
+  margin: 0;
+  padding: 12px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: auto;
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.napkin-code code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  white-space: pre;
+}
+
+/* Rendered Markdown */
+.napkin-md {
+  font-size: 14px;
+  line-height: 1.6;
+  word-wrap: break-word;
+}
+
+.napkin-md :first-child {
+  margin-top: 0;
+}
+
+.napkin-md :last-child {
+  margin-bottom: 0;
+}
+
+.napkin-md h1,
+.napkin-md h2,
+.napkin-md h3 {
+  line-height: 1.3;
+}
+
+.napkin-md pre {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px;
+  overflow: auto;
+}
+
+.napkin-md code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.9em;
+}
+
+.napkin-md :not(pre) > code {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+
+.napkin-md a {
+  color: var(--accent);
+}
+
+.napkin-md table {
+  border-collapse: collapse;
+  width: 100%;
+}
+
+.napkin-md th,
+.napkin-md td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+}
+
+.napkin-md blockquote {
+  margin: 8px 0;
+  padding-left: 12px;
+  border-left: 3px solid var(--border);
+  color: var(--muted);
+}
+
+/* SVG / Mermaid / image artifacts */
+.napkin-svg,
+.napkin-mermaid,
+.napkin-img-wrap {
+  display: flex;
+  justify-content: center;
+}
+
+.napkin-svg svg,
+.napkin-mermaid svg {
+  max-width: 100%;
+  height: auto;
+}
+
+.napkin-img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+}
+
+.napkin-mermaid-err {
+  color: #e05a5a;
+  font-size: 13px;
+}
+
+.napkin-mermaid-err p {
+  margin: 0 0 8px;
+}
+
+/* Multiple-choice clarify prompt */
+.napkin-choice {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 14px;
+  background: var(--bg);
+  margin-bottom: 14px;
+}
+
+.napkin-choice-title {
+  font-weight: 600;
+  font-size: 13px;
+  margin-bottom: 6px;
+}
+
+.napkin-choice-prompt {
+  margin: 0 0 12px;
+  font-size: 13.5px;
+  line-height: 1.5;
+  color: var(--text);
+}
+
+.napkin-choice-options {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.napkin-choice-btn {
+  text-align: left;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.napkin-choice-btn:hover {
+  border-color: var(--accent);
+  background: rgba(245, 197, 66, 0.1);
+}
+
+/* Transcript chip that reopens a shown napkin */
+.napkin-chip-line {
+  max-width: 80%;
+}
+
+.napkin-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+  border-radius: 999px;
+  padding: 6px 12px;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.napkin-chip:hover {
+  border-color: var(--accent);
+}
+
+.napkin-chip-kind {
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+/* On narrow windows the napkin takes a smaller slice. */
+@media (max-width: 720px) {
+  .napkin-panel {
+    width: min(360px, 70vw);
+    min-width: 0;
+  }
+}
+
+/* Subtle button to create a new napkin manually. Positioned on the right edge
+   of the stage, in the vertical bar next to the napkin panel. Small and
+   understated to avoid cluttering the UI, but visible enough to discover. */
+.napkin-creator-btn {
+  position: absolute;
+  right: 16px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: #f39c12;
+  border: none;
+  color: #1a1a1a;
+  font-size: 20px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 2px 8px rgba(243, 156, 18, 0.3);
+  transition: transform 0.15s ease, box-shadow 0.15s ease, background 0.2s ease;
+  z-index: 40;
+}
+
+.napkin-creator-btn:hover {
+  transform: translateY(-50%) scale(1.1);
+  box-shadow: 0 4px 12px rgba(243, 156, 18, 0.45);
+  background: #f5ad28;
+}
+
+.napkin-creator-btn:active {
+  transform: translateY(-50%) scale(0.95);
+  box-shadow: 0 1px 4px rgba(243, 156, 18, 0.3);
+}
+
+/* The napkin creator modal overlay */
+.napkin-creator-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 60;
+  animation: creator-fade-in 0.2s ease-out;
+}
+
+@keyframes creator-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.napkin-creator-modal {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+  padding: 24px;
+  max-width: 420px;
+  width: 90vw;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  animation: creator-slide-in 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+@keyframes creator-slide-in {
+  from {
+    transform: translateY(-20px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+.creator-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.creator-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text);
+  margin: 0;
+}
+
+.creator-close {
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.creator-close:hover {
+  color: #e05a5a;
+}
+
+.creator-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.creator-label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.creator-label > input,
+.creator-label > textarea {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 13px;
+  font-family: inherit;
+}
+
+.creator-label > input:focus,
+.creator-label > textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.creator-label > textarea {
+  resize: vertical;
+  min-height: 100px;
+}
+
+.creator-kinds {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(70px, 1fr));
+  gap: 8px;
+}
+
+.kind-btn {
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease, color 0.15s ease;
+}
+
+.kind-btn:hover {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.kind-btn.active {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+.creator-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.creator-btn {
+  border-radius: 8px;
+  padding: 8px 16px;
+  font-weight: 600;
+  cursor: pointer;
+  font-size: 13px;
+  border: 1px solid var(--border);
+}
+
+.creator-btn.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on-accent);
+}
+
+.creator-btn.primary:hover {
+  filter: brightness(1.08);
+}
+
+.creator-btn.cancel {
+  background: transparent;
+  color: var(--text);
+}
+
+.creator-btn.cancel:hover {
+  border-color: var(--accent);
+}
+
+

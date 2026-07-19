@@ -3,15 +3,15 @@
 This guide covers how to run the automated tests locally. Tests run on
 [Vitest](https://vitest.dev) and are split into two tiers:
 
-- **Core tests** — deterministic, network-light, and fast. They cover config
+- **Core tests**: deterministic, network-light, and fast. They cover config
   validation, the Pantry catalog, and a real filesystem-MCP integration test.
   These run on every push and pull request to `main`.
-- **Optional tests** — integration tests for the `uvx`-based Pantry servers
+- **Optional tests**: integration tests for the `uvx`-based Pantry servers
   (time, sqlite, git, fetch). They need the [`uv`](https://github.com/astral-sh/uv)
   toolchain and network access, so they're opt-in.
 
 > **What isn't tested:** the local LLM deciding *when* to call a tool. That needs
-> a running `lemond`, a model, and a GPU, and its output is non-deterministic —
+> a running `lemond`, a model, and a GPU, and its output is non-deterministic,
 > so it's out of scope for automated tests. The tests exercise the tool
 > **plumbing** (`McpManager` → connect → `listTools` → `callTool`), which is the
 > code path every tool call travels regardless of the model.
@@ -46,7 +46,7 @@ Expected output looks like:
 
 ### Watch mode
 
-For fast feedback while editing, run the watcher — it re-runs affected tests on
+For fast feedback while editing, run the watcher, it re-runs affected tests on
 save:
 
 ```powershell
@@ -96,9 +96,9 @@ that's installed too.
 The [`ci.yml`](../.github/workflows/ci.yml) workflow runs on every push and pull
 request to `main`:
 
-- **`test`** — type-check + core tests. This is the job to make a **required
+- **`test`**: type-check + core tests. This is the job to make a **required
   status check** in branch protection so merges are gated on green tests.
-- **`test-optional`** — installs `uv` and runs the optional suite. It's marked
+- **`test-optional`**: installs `uv` and runs the optional suite. It's marked
   `continue-on-error`, so a flaky download or upstream change never blocks a
   merge; review its result but don't gate on it.
 
@@ -110,7 +110,7 @@ request to `main`:
   downloads each server package. The suite allows a generous timeout; re-run
   once the packages are cached.
 - **Filesystem test fails to connect.** It uses `npx` to fetch
-  `@modelcontextprotocol/server-filesystem` on first run — make sure you have
+  `@modelcontextprotocol/server-filesystem` on first run. make sure you have
   network access and `npx` works (`npx --version`).
 - **`fetch` test fails.** It reaches `https://example.com`; a blocked or offline
   network will fail it. This is why it's in the optional, non-blocking tier.

@@ -2,7 +2,7 @@ import { resolve } from 'node:path'
 import { defineConfig } from 'vitest/config'
 
 // Vitest runs the main-process (Node) logic and MCP integration tests. The
-// renderer/Electron layers aren't exercised here — these tests cover the parts
+// renderer/Electron layers aren't exercised here, these tests cover the parts
 // that can run headless in CI without a GPU, a model, or a display.
 export default defineConfig({
   resolve: {

@@ -1,8 +1,8 @@
-import { readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { resolve } from 'node:path'
-import type { CatalogEntry, McpServerConfig } from '@shared/types'
+import type { CatalogEntry, McpServerConfig, Pitcher } from '@shared/types'
 
-// Minimal .env loader — avoids a dependency. Parses KEY=VALUE lines, ignores
+// Minimal .env loader, avoids a dependency. Parses KEY=VALUE lines, ignores
 // comments/blank lines, and does not override variables already in the real
 // environment (so OS-level env wins, matching Lemonade's own key handling).
 function loadDotEnv(cwd: string): void {
@@ -69,18 +69,14 @@ export interface AppConfig {
 export function loadConfig(cwd: string = process.cwd()): AppConfig {
   loadDotEnv(cwd)
 
-  let servers: McpServerConfig[] = []
-  try {
-    const raw = readFileSync(resolve(cwd, 'config/servers.json'), 'utf8')
-    const parsed = JSON.parse(raw) as { servers?: McpServerConfig[] }
-    servers = (parsed.servers ?? []).filter((s) => s.enabled)
-  } catch {
-    // No server config -> agent runs chat-only with no external tools.
-  }
+  // Base defaults live in the committed config/servers.json; a developer's
+  // personal edits layer over them from the gitignored config/servers.local.json
+  // (see readServers). Only enabled servers are launched.
+  const servers = readServers(cwd).filter((s) => s.enabled)
 
   // Values the user sets in the app's UI (model, server connection) are
   // remembered across restarts in settings.json. A UI choice is explicit, so it
-  // takes priority over the matching env var — which acts only as the *initial*
+  // takes priority over the matching env var, which acts only as the *initial*
   // default before the user has ever chosen one. Precedence for each:
   // saved choice, then env default, then the built-in default.
   const saved = readSettings(cwd)
@@ -132,9 +128,13 @@ const DEFAULT_SYSTEM_PROMPT =
   'Skip planning for simple, one-step requests.'
 
 const SERVERS_FILE = 'config/servers.json'
+// Optional, gitignored per-developer override merged over SERVERS_FILE. Keeps
+// local server tweaks out of the tracked defaults (and out of `git status`).
+const SERVERS_LOCAL_FILE = 'config/servers.local.json'
 const CATALOG_FILE = 'config/catalog.json'
 const PHRASES_FILE = 'config/phrases.json'
 const SETTINGS_FILE = 'config/settings.json'
+const PITCHERS_FILE = 'config/pitchers.json'
 
 /** User-chosen state that must survive restarts (e.g. the active chat model). */
 export interface AppSettings {
@@ -193,20 +193,50 @@ export function loadThinkingPhrases(cwd: string): string[] {
   }
 }
 
-/** Read every configured server (enabled and disabled) from disk. */
-export function readServers(cwd: string): McpServerConfig[] {
+/** Read one server-config file's `servers` array; null when the file is absent. */
+function readServersFile(cwd: string, file: string): McpServerConfig[] | null {
   try {
-    const raw = readFileSync(resolve(cwd, SERVERS_FILE), 'utf8')
+    const raw = readFileSync(resolve(cwd, file), 'utf8')
     const parsed = JSON.parse(raw) as { servers?: McpServerConfig[] }
     return parsed.servers ?? []
   } catch {
-    return []
+    return null
   }
 }
 
-/** Persist the server list, preserving any sibling keys (e.g. the schema-note). */
+/** Layer a local override list over the base list, keyed by server id: a local
+ * entry replaces the same-id base entry in place; brand-new ids are appended. */
+function mergeServers(
+  base: McpServerConfig[],
+  local: McpServerConfig[]
+): McpServerConfig[] {
+  const byId = new Map(base.map((s) => [s.id, s]))
+  const order = base.map((s) => s.id)
+  for (const s of local) {
+    if (!byId.has(s.id)) order.push(s.id)
+    byId.set(s.id, s)
+  }
+  return order.map((id) => byId.get(id) as McpServerConfig)
+}
+
+/** Read every configured server (enabled and disabled), with the gitignored
+ * local override (config/servers.local.json) merged over the committed defaults.
+ * A developer's personal server edits live only in the local file, so the tracked
+ * config/servers.json never picks up local churn. */
+export function readServers(cwd: string): McpServerConfig[] {
+  const base = readServersFile(cwd, SERVERS_FILE) ?? []
+  const local = readServersFile(cwd, SERVERS_LOCAL_FILE)
+  return local ? mergeServers(base, local) : base
+}
+
+/** Persist the server list, preserving any sibling keys (e.g. the schema-note).
+ * Writes to the gitignored local override when it exists, so UI edits in a dev
+ * checkout don't dirty the tracked config/servers.json. */
 export function writeServers(cwd: string, servers: McpServerConfig[]): void {
-  const path = resolve(cwd, SERVERS_FILE)
+  const target = existsSync(resolve(cwd, SERVERS_LOCAL_FILE))
+    ? SERVERS_LOCAL_FILE
+    : SERVERS_FILE
+  const path = resolve(cwd, target)
   let existing: Record<string, unknown> = {}
   try {
     existing = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>
@@ -214,6 +244,29 @@ export function writeServers(cwd: string, servers: McpServerConfig[]): void {
     // Fresh file is fine.
   }
   writeFileSync(path, JSON.stringify({ ...existing, servers }, null, 2) + '\n', 'utf8')
+}
+
+/** Read every configured Pitcher (scheduled task) from disk. */
+export function readPitchers(cwd: string): Pitcher[] {
+  try {
+    const raw = readFileSync(resolve(cwd, PITCHERS_FILE), 'utf8')
+    const parsed = JSON.parse(raw) as { pitchers?: Pitcher[] }
+    return parsed.pitchers ?? []
+  } catch {
+    return []
+  }
+}
+
+/** Persist the Pitcher list, preserving any sibling keys (e.g. the note). */
+export function writePitchers(cwd: string, pitchers: Pitcher[]): void {
+  const path = resolve(cwd, PITCHERS_FILE)
+  let existing: Record<string, unknown> = {}
+  try {
+    existing = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>
+  } catch {
+    // Fresh file is fine.
+  }
+  writeFileSync(path, JSON.stringify({ ...existing, pitchers }, null, 2) + '\n', 'utf8')
 }
 
 /** The Market catalogue of installable tools/skills. */

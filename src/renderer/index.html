@@ -4,10 +4,12 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <!-- Lock the renderer down: no remote content, no inline eval. blob: is
-         allowed for media so synthesized TTS audio can be played back. -->
+         allowed for media so synthesized TTS audio can be played back. data:
+         images are allowed so the Napkin panel can render base64 images and
+         Mermaid-generated SVG. -->
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; media-src 'self' blob:"
+      content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:"
     />
     <title>Lemonade Stand</title>
   </head>

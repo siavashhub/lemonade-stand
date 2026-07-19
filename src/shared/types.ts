@@ -32,6 +32,37 @@ export interface AgentTool {
   description: string
 }
 
+/** The kind of content a Napkin panel renders. Raw HTML / live browsing is
+ * intentionally excluded: the model emits declarative content the renderer
+ * knows how to display safely (sanitized before it ever hits the DOM). */
+export type NapkinKind = 'code' | 'markdown' | 'mermaid' | 'svg' | 'image'
+
+/** A rich artifact the agent asks the app to show in the side "Napkin" panel,
+ * to enrich a reply beyond plain chat text. Created via the built-in
+ * `show_napkin` tool; the loop intercepts the call and surfaces it to the UI. */
+export interface Napkin {
+  /** Short heading shown at the top of the panel. */
+  title: string
+  kind: NapkinKind
+  /** The payload: source text for code/markdown/mermaid/svg, or base64-encoded
+   * bytes (no `data:` prefix) for an image. */
+  content: string
+  /** Language hint for `kind:'code'` display, e.g. 'ts', 'python'. */
+  language?: string
+  /** MIME type for `kind:'image'`, e.g. 'image/png'. Defaults to image/png. */
+  mimeType?: string
+  /** Descriptive alt text for `kind:'image'`. */
+  alt?: string
+}
+
+/** One selectable option in an `ask_napkin` clarification prompt. */
+export interface NapkinChoice {
+  /** Stable id returned to the model when chosen. Defaults to the label. */
+  id: string
+  /** Human-readable option text shown on the button. */
+  label: string
+}
+
 /** One entry in config/servers.json. */
 export type McpServerConfig =
   | {
@@ -154,6 +185,34 @@ export interface ModelInfo {
   active: boolean
 }
 
+/** Progress snapshot for a server-owned model download job, surfaced so the UI
+ * can show a live progress bar, byte counts, and status for a model being
+ * pulled. Mirrors (a subset of) the Lemonade server's /downloads job shape. */
+export interface DownloadJob {
+  /** Stable download id, e.g. `model:Qwen3-4B-GGUF`; used with the control API. */
+  id: string
+  /** The Lemonade model name this job downloads. */
+  modelName: string
+  /** Lifecycle state reported by the server. */
+  status: 'downloading' | 'paused' | 'cancelled' | 'completed' | 'error'
+  /** Whether the download worker is still active. */
+  running: boolean
+  /** Overall progress across all of the job's files (0–100). */
+  percent: number
+  /** Total bytes downloaded across the whole job so far. */
+  bytesDownloaded: number
+  /** Total expected bytes across all files, when known (0 until resolved). */
+  bytesTotal: number
+  /** 1-based index of the file currently downloading, when reported. */
+  fileIndex?: number
+  /** Number of files in the job, when reported. */
+  totalFiles?: number
+  /** True once every file has downloaded successfully. */
+  complete: boolean
+  /** Populated only for failed jobs. */
+  error?: string
+}
+
 /** Live state of a configured server, merged with catalog metadata in the UI. */
 export interface McpServerState {
   id: string
@@ -182,6 +241,7 @@ export type TranscriptEntry =
   | { kind: 'assistant'; text: string }
   | { kind: 'tool'; label: string; detail: string; ok?: boolean }
   | { kind: 'plan'; steps: PlanStep[] }
+  | { kind: 'napkin'; napkin: Napkin }
   | { kind: 'warning'; text: string }
   | { kind: 'error'; text: string }
 
@@ -210,6 +270,51 @@ export interface StoredSession extends SessionSummary {
   summary?: string
 }
 
+/** How a Pitcher fires. `on-open` runs once per app launch; `daily` runs at a
+ * local "HH:MM" each day (and catches up on launch if that time was missed
+ * while the app was closed). */
+export type PitcherTrigger =
+  | { type: 'on-open' }
+  | { type: 'daily'; at: string } // "HH:MM", 24-hour local time
+
+/** Where a finished pour is served. File output is a v2 concern. */
+export type PitcherOutput = 'napkin' | 'chat'
+
+/** A scheduled task ("Pitcher"): a saved prompt the app pours on a trigger and
+ * serves fresh. Stored in config/pitchers.json. */
+export interface Pitcher {
+  id: string
+  /** Display name, also used as the saved-conversation title. */
+  name: string
+  enabled: boolean
+  /** The instruction handed to the agent when the Pitcher pours. */
+  prompt: string
+  trigger: PitcherTrigger
+  output: PitcherOutput
+  /** Qualified tool names (`<serverId>__<toolName>`) auto-approved during a
+   * pour. Anything not listed is denied, so a scheduled task never gets a blank
+   * cheque to run tools it wasn't explicitly granted. */
+  allowedTools: string[]
+  /** Epoch ms of the last successful pour, for daily catch-up on launch. */
+  lastRunAt?: number
+  lastStatus?: 'ok' | 'error'
+  lastError?: string
+}
+
+/** Result of a single pour, returned to the renderer's "Pour now" button. */
+export interface PitcherRunResult {
+  id: string
+  ok: boolean
+  /** Saved conversation id, when the pour produced one. */
+  sessionId?: string
+  error?: string
+}
+
+/** Pushed to the renderer as a Pitcher's run state changes. */
+export type PitcherEvent =
+  | { type: 'pitcher_started'; id: string }
+  | { type: 'pitcher_finished'; id: string; ok: boolean; sessionId?: string; error?: string }
+
 /** Streamed events the main process pushes to the renderer during a turn. */
 export type AgentEvent =
   | { type: 'assistant_text'; text: string }
@@ -218,9 +323,16 @@ export type AgentEvent =
   // The model created or revised its working plan via the built-in `update_plan`
   // tool. `steps` is the full, current checklist the renderer should display.
   | { type: 'plan_updated'; steps: PlanStep[] }
+  // The agent asked to display a rich artifact in the side Napkin panel via the
+  // built-in `show_napkin` tool (code, markdown, a diagram, an SVG, or image).
+  | { type: 'napkin_show'; napkin: Napkin }
+  // The agent needs the user to pick among choices to clarify the request (the
+  // built-in `ask_napkin` tool). Main is blocked awaiting the user's selection;
+  // the renderer must call respondNapkinChoice(id, choiceId) to unblock it.
+  | { type: 'napkin_choice_request'; id: string; title: string; prompt: string; choices: NapkinChoice[] }
   // Live per-category context usage for the in-flight turn, so the usage badge
   // reflects the real prompt size (including tool calls/results) while the agent
-  // works — not just the committed chat history.
+  // works , not just the committed chat history.
   | { type: 'context_usage'; breakdown: ContextBreakdown }
   // The agent used up its step budget without finishing. Main is blocked
   // awaiting the user's choice; the renderer must call respondStepLimit(id, ...)
@@ -260,9 +372,17 @@ export interface RendererApi {
   onAgentEvent(handler: (event: AgentEvent) => void): () => void
   /** Answer a pending `tool_approval_request`. */
   respondApproval(id: string, decision: ApprovalDecision): void
+  /** Turn the session-scoped approval bypass on or off. While on, tool calls
+   * are approved without prompting. Scoped to the current conversation: the
+   * renderer resets it to false whenever a new session starts, so it never
+   * outlives the session and a fresh session falls back to the default
+   * (env/settings.json) approval behavior. */
+  setBypassApprovals(enabled: boolean): void
   /** Answer a pending `step_limit_request`: true to let the agent keep going
    * for another budget, false to stop it. */
   respondStepLimit(id: string, cont: boolean): void
+  /** Answer a pending `napkin_choice_request` with the chosen option id. */
+  respondNapkinChoice(id: string, choiceId: string): void
   /** Toggle spoken replies (TTS). Returns the effective state. */
   setSpeak(enabled: boolean): Promise<boolean>
   /** Current spoken-reply state, seeded from config at startup. */
@@ -303,6 +423,16 @@ export interface RendererApi {
   /** Load a model on the server and make it the app's active chat model.
    * Returns the refreshed model list, or throws on failure. */
   loadModel(id: string): Promise<ModelInfo[]>
+  /** Start a background download of a model on the server (server-owned job
+   * that survives a renderer reload). Returns the job's initial snapshot. */
+  downloadModel(id: string): Promise<DownloadJob>
+  /** List in-flight/recent server-owned model download jobs, for progress. */
+  listDownloads(): Promise<DownloadJob[]>
+  /** Pause, cancel, or remove a server-owned model download job. */
+  controlDownload(id: string, action: 'pause' | 'cancel' | 'remove'): Promise<void>
+  /** Delete a downloaded model from local storage to free up disk space.
+   * Returns the refreshed model list, or throws on failure. */
+  deleteModel(id: string): Promise<ModelInfo[]>
   /** The Market catalogue of installable tools/skills. */
   listCatalog(): Promise<CatalogEntry[]>
   /** Current state of every configured server (enabled or not). */
@@ -329,6 +459,16 @@ export interface RendererApi {
   /** Ask the model for a short auto-title for a conversation. Falls back to a
    * trimmed first user message when the model is unavailable. */
   suggestTitle(history: ChatMessage[]): Promise<string>
+  /** List all configured Pitchers (scheduled tasks). */
+  listPitchers(): Promise<Pitcher[]>
+  /** Create or update a Pitcher, then reschedule. Returns the refreshed list. */
+  savePitcher(pitcher: Pitcher): Promise<Pitcher[]>
+  /** Delete a Pitcher. Returns the refreshed list. */
+  deletePitcher(id: string): Promise<Pitcher[]>
+  /** Pour a Pitcher immediately ("Pour now"). */
+  runPitcher(id: string): Promise<PitcherRunResult>
+  /** Subscribe to Pitcher run-state events. Returns an unsubscribe function. */
+  onPitcherEvent(handler: (event: PitcherEvent) => void): () => void
   /** Minimize the window. */
   minimizeWindow(): void
   /** Toggle between maximized and restored. */

@@ -36,7 +36,7 @@ function cleanEnv(env: NodeJS.ProcessEnv): Record<string, string> {
 
 // Directories prepended to a stdio server's PATH so its launcher (uvx/uv) and
 // sibling tools resolve even when the app's own PATH is stale (e.g. uv was
-// installed after the app started) or the user never installed uv at all — in
+// installed after the app started) or the user never installed uv at all , in
 // packaged builds we ship uv under resources/bin (-> <resources>/bin).
 let cachedBinDirs: string[] | null = null
 function bundledBinDirs(): string[] {
@@ -52,19 +52,22 @@ function bundledBinDirs(): string[] {
   return cachedBinDirs
 }
 
-// Windows env var names are case-insensitive; find the real PATH key or default.
-function pathKey(env: Record<string, string>): string {
-  if (process.platform === 'win32') {
-    return Object.keys(env).find((k) => k.toLowerCase() === 'path') ?? 'Path'
-  }
-  return 'PATH'
-}
-
 function withBundledPath(env: Record<string, string>): Record<string, string> {
+  // Collapse every case-variant of PATH (Windows exposes `Path`) into a single
+  // canonical uppercase `PATH`. The MCP SDK's getDefaultEnvironment() injects an
+  // uppercase `PATH` (with the un-augmented value) and merges it BEFORE our env;
+  // if we left a differently-cased `Path` key around, the spawned process would
+  // carry BOTH keys and cross-spawn could resolve the launcher against the stale
+  // one — producing `spawn uvx ENOENT` even though our bin dir was on `Path`.
+  let current = ''
+  for (const k of Object.keys(env)) {
+    if (k.toLowerCase() === 'path') {
+      if (!current) current = env[k]
+      delete env[k]
+    }
+  }
   const dirs = bundledBinDirs()
-  if (dirs.length === 0) return env
-  const key = pathKey(env)
-  env[key] = [...dirs, env[key] ?? ''].filter(Boolean).join(delimiter)
+  env.PATH = [...dirs, current].filter(Boolean).join(delimiter)
   return env
 }
 
@@ -176,7 +179,7 @@ export class McpManager {
     if (server.transport === 'stdio') {
       // resolveStdioLaunch augments PATH with our bundled uv (resources/bin)
       // and uv's user install dir, and reroutes npx launchers through
-      // Electron's built-in Node — so the uvx/npx toolchains don't need to be
+      // Electron's built-in Node , so the uvx/npx toolchains don't need to be
       // installed (or on a freshly-restarted PATH) for a server to start. The
       // MCP SDK otherwise spawns with a stripped env, which is why stdio servers
       // connect in `npm run dev` but silently fail in a packaged build. Config
@@ -252,7 +255,7 @@ export class McpManager {
     const result = await owner.client.callTool({ name: originalName, arguments: args })
 
     // Flatten MCP content blocks to text. Non-text blocks (image/audio) are
-    // summarized rather than inlined — this is a text agent loop; binary media
+    // summarized rather than inlined , this is a text agent loop; binary media
     // would blow up the context window.
     const blocks = Array.isArray(result.content) ? result.content : []
     const parts: string[] = []

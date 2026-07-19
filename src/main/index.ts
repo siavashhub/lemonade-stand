@@ -1,23 +1,37 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, Notification } from 'electron'
 import { randomUUID } from 'node:crypto'
 import { copyFileSync, existsSync, mkdirSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import type { AgentEvent, ApprovalDecision, ChatMessage, McpServerState, StoredSession } from '@shared/types'
+import type {
+  AgentEvent,
+  ApprovalDecision,
+  ChatMessage,
+  McpServerState,
+  Napkin,
+  Pitcher,
+  PitcherEvent,
+  PitcherRunResult,
+  StoredSession,
+  TranscriptEntry
+} from '@shared/types'
 import {
   loadCatalog,
   loadConfig,
   loadThinkingPhrases,
   pathForServer,
+  readPitchers,
   readServers,
   serverFromCatalog,
   withServerPath,
+  writePitchers,
   writeServers,
   writeSettings
 } from './config'
 import { LemonadeClient } from './lemonade/client'
 import { McpManager } from './mcp/manager'
-import { Agent, type ApproveFn, type ContinueFn } from './agent/loop'
+import { Agent, type ApproveFn, type AskNapkinFn, type ContinueFn } from './agent/loop'
+import { PitcherScheduler } from './pitcher/scheduler'
 import { initFileLogging } from './logger'
 import {
   clearSessions,
@@ -33,7 +47,7 @@ const __dirname = fileURLToPath(new URL('.', import.meta.url))
 // servers, settings). In development that's the project root. In a packaged
 // build the bundled defaults ship read-only under `process.resourcesPath/config`
 // (see electron-builder.yml `extraResources`), while the app must also *write*
-// to servers.json / settings.json — so on first run we seed those defaults into
+// to servers.json / settings.json, so on first run we seed those defaults into
 // a writable per-user directory and read/write there afterwards. This fixes a
 // packaged app starting empty (no Pantry catalogue, no configured servers)
 // because it was looking for `config/` inside the read-only asar.
@@ -88,6 +102,12 @@ debugLog(
 // name). Cleared on restart so a persistent grant never outlives the process.
 const sessionAllow = new Set<string>()
 
+// Session-scoped "bypass approvals" override. When on, tool calls are approved
+// without prompting regardless of config.requireApproval. The renderer turns it
+// on/off from the status bar and resets it to false whenever a new conversation
+// starts, so a bypass never carries over into a fresh session.
+let bypassApprovals = false
+
 // In-flight approval prompts: id -> resolver. The agent loop awaits these;
 // the renderer resolves them via the 'agent:approve' channel.
 const pendingApprovals = new Map<string, (decision: ApprovalDecision) => void>()
@@ -97,11 +117,21 @@ const pendingApprovals = new Map<string, (decision: ApprovalDecision) => void>()
 // the 'agent:continue' channel.
 const pendingLimits = new Map<string, (cont: boolean) => void>()
 
+// In-flight napkin choice prompts: id -> resolver. When the agent asks a
+// multiple-choice clarifying question (ask_napkin), it blocks until the user
+// picks an option in the Napkin panel; the reply arrives on the
+// 'agent:napkin-choice' channel.
+const pendingNapkinChoices = new Map<string, (choiceId: string) => void>()
+
 // Abort handles for work the user can halt mid-flight. The renderer's stop
 // button signals these via the 'agent:cancel' / 'agent:cancel-transcribe'
 // channels so a long chat turn or transcription can be interrupted.
 let currentAgentAbort: AbortController | null = null
 let currentTranscribeAbort: AbortController | null = null
+
+// The main window, captured in createWindow(). Headless Pitcher pours use it to
+// mirror events to an open UI and to raise desktop notifications.
+let mainWindow: BrowserWindow | null = null
 
 function createWindow(): void {
   const window = new BrowserWindow({
@@ -126,6 +156,13 @@ function createWindow(): void {
       // the renderer can gate its own diagnostic logging without an IPC round-trip.
       additionalArguments: [`--app-debug=${config.debug ? '1' : '0'}`]
     }
+  })
+
+  // Keep a handle so headless Pitcher pours can mirror events to the UI and
+  // raise desktop notifications.
+  mainWindow = window
+  window.on('closed', () => {
+    if (mainWindow === window) mainWindow = null
   })
 
   // Window controls driven by the renderer's custom top bar.
@@ -361,6 +398,26 @@ ipcMain.handle('agent:load-model', async (_event, id: string, ctxSize?: number) 
   return lemonade.listModels()
 })
 
+// Start a server-owned background download of a model. Returns the initial job
+// snapshot; the renderer polls agent:list-downloads for live progress.
+ipcMain.handle('agent:download-model', (_event, id: string) => lemonade.startDownload(id))
+
+// Current model download jobs, for the live progress indicators.
+ipcMain.handle('agent:list-downloads', () => lemonade.listDownloads())
+
+// Pause, cancel, or remove a model download job.
+ipcMain.handle('agent:control-download', (_event, id: string, action: 'pause' | 'cancel' | 'remove') =>
+  lemonade.controlDownload(id, action)
+)
+
+// Delete a downloaded model from local storage to free up disk space. Returns
+// the refreshed model list so the UI reflects its now not-downloaded state.
+ipcMain.handle('agent:delete-model', async (_event, id: string) => {
+  const result = await lemonade.deleteModel(id)
+  if (!result.ok) throw new Error(result.error ?? 'Failed to delete model')
+  return lemonade.listModels()
+})
+
 // Renderer's answer to a tool_approval_request. Resolving the stored promise
 // unblocks the agent loop.
 ipcMain.on('agent:approve', (_event, id: string, decision: ApprovalDecision) => {
@@ -371,6 +428,13 @@ ipcMain.on('agent:approve', (_event, id: string, decision: ApprovalDecision) => 
   }
 })
 
+// Toggle the session-scoped approval bypass. The renderer sets it true when the
+// user turns on "bypass approvals" and false when a new conversation starts, so
+// the override never outlives the session that enabled it.
+ipcMain.on('agent:set-bypass', (_event, enabled: boolean) => {
+  bypassApprovals = enabled
+})
+
 // Renderer's answer to a step_limit_request: true to grant another step budget,
 // false to stop. Resolving the stored promise unblocks the agent loop.
 ipcMain.on('agent:continue', (_event, id: string, cont: boolean) => {
@@ -378,6 +442,16 @@ ipcMain.on('agent:continue', (_event, id: string, cont: boolean) => {
   if (resolve) {
     pendingLimits.delete(id)
     resolve(cont)
+  }
+})
+
+// Renderer's answer to a napkin_choice_request: the id of the option the user
+// picked. Resolving the stored promise unblocks the agent loop.
+ipcMain.on('agent:napkin-choice', (_event, id: string, choiceId: string) => {
+  const resolve = pendingNapkinChoices.get(id)
+  if (resolve) {
+    pendingNapkinChoices.delete(id)
+    resolve(choiceId)
   }
 })
 
@@ -395,6 +469,10 @@ function describeEvent(e: AgentEvent): string {
         .map((s) => `${s.status[0]}:${s.title}`)
         .join(' | ')
         .slice(0, 300)}]`
+    case 'napkin_show':
+      return `napkin_show kind=${e.napkin.kind} title=${e.napkin.title} len=${e.napkin.content.length}`
+    case 'napkin_choice_request':
+      return `napkin_choice_request choices=${e.choices.length} prompt=${e.prompt.slice(0, 80)}`
     case 'assistant_text':
       return `assistant_text len=${e.text.trim().length}`
     case 'tool_approval_request':
@@ -450,10 +528,12 @@ ipcMain.handle('agent:send', async (event, messages: ChatMessage[]) => {
     }
   }
 
-  // Approve callback: auto-allow when approval is disabled or the tool was
-  // already "always allowed"; otherwise prompt the renderer and await a reply.
+  // Approve callback: auto-allow when approval is disabled, the session is
+  // bypassing approvals, or the tool was already "always allowed"; otherwise
+  // prompt the renderer and await a reply.
   const approve: ApproveFn = ({ server, tool, qualified, args }) => {
-    if (!config.requireApproval || sessionAllow.has(qualified)) return Promise.resolve(true)
+    if (!config.requireApproval || bypassApprovals || sessionAllow.has(qualified))
+      return Promise.resolve(true)
     const id = randomUUID()
     send({ type: 'tool_approval_request', id, server, tool, args })
     return new Promise<boolean>((resolve) => {
@@ -478,17 +558,157 @@ ipcMain.handle('agent:send', async (event, messages: ChatMessage[]) => {
     })
   }
 
+  // Napkin-choice callback: prompt the renderer with a multiple-choice question
+  // (rendered in the Napkin panel) and await the id of the option the user picks.
+  const askNapkin: AskNapkinFn = ({ title, prompt, choices }) => {
+    const id = randomUUID()
+    send({ type: 'napkin_choice_request', id, title, prompt, choices })
+    return new Promise<string>((resolve) => {
+      pendingNapkinChoices.set(id, resolve)
+    })
+  }
+
   const abort = new AbortController()
   currentAgentAbort = abort
   try {
-    await agent.run(messages, emit, approve, abort.signal, onLimit)
+    await agent.run(messages, emit, approve, abort.signal, onLimit, askNapkin)
   } finally {
     if (currentAgentAbort === abort) currentAgentAbort = null
   }
 })
 
-// Renderer's stop button: halt the running agent turn.
-ipcMain.on('agent:cancel', () => currentAgentAbort?.abort())
+// Renderer's stop button: halt the running agent turn. Aborting only flips the
+// signal, which the loop checks between steps , but if the turn is parked on a
+// pending approval prompt it would never reach that check. So also drain any
+// in-flight approvals, resolving each as a denial, to unblock the awaited
+// `approve(...)` call so the loop can observe the abort and stop.
+ipcMain.on('agent:cancel', () => {
+  currentAgentAbort?.abort()
+  for (const resolve of pendingApprovals.values()) resolve('deny')
+  pendingApprovals.clear()
+})
+
+// --- Pitcher: scheduled tasks ------------------------------------------------
+
+function emitPitcher(evt: PitcherEvent): void {
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('pitcher:event', evt)
+}
+
+// Run one Pitcher end-to-end. Auto-approves only tools on its allowlist; every
+// other tool call is denied so a scheduled task can't be steered (e.g. by
+// injected web content) into actions it was never granted. The pour is saved as
+// a normal conversation the user can reopen, and a desktop notification is
+// raised when the window isn't focused. Bounded retry guards against a flaky
+// local model that occasionally fails to call its tools.
+async function pourPitcher(p: Pitcher): Promise<PitcherRunResult> {
+  emitPitcher({ type: 'pitcher_started', id: p.id })
+
+  const messages: ChatMessage[] = [{ role: 'user', content: p.prompt }]
+  let napkin: Napkin | null = null
+  let finalText = ''
+
+  const emit = (e: AgentEvent): void => {
+    if (e.type === 'assistant_text') finalText = e.text
+    if (e.type === 'napkin_show') napkin = e.napkin
+    // Mirror to the window if the user happens to be watching.
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('agent:event', e)
+  }
+
+  // Whitelist approve: allow iff the qualified tool is explicitly permitted.
+  const approve: ApproveFn = ({ qualified }) => Promise.resolve(p.allowedTools.includes(qualified))
+
+  let lastErr: unknown = null
+  for (let attempt = 0; attempt < 2; attempt++) {
+    napkin = null
+    finalText = ''
+    const abort = new AbortController()
+    try {
+      // No onLimit/askNapkin: a headless pour must not block on user input, so
+      // the loop stops at its step budget and skips clarification instead.
+      await agent.run(messages, emit, approve, abort.signal)
+      lastErr = null
+      break
+    } catch (err) {
+      lastErr = err
+    }
+  }
+
+  const now = Date.now()
+  const list = readPitchers(appPath)
+  const idx = list.findIndex((x) => x.id === p.id)
+
+  if (lastErr) {
+    const error = lastErr instanceof Error ? lastErr.message : String(lastErr)
+    if (idx >= 0) {
+      list[idx] = { ...list[idx], lastStatus: 'error', lastError: error }
+      writePitchers(appPath, list)
+    }
+    if (mainWindow && !mainWindow.isFocused() && Notification.isSupported())
+      new Notification({ title: `Pitcher failed: ${p.name}`, body: error }).show()
+    emitPitcher({ type: 'pitcher_finished', id: p.id, ok: false, error })
+    return { id: p.id, ok: false, error }
+  }
+
+  // Persist the pour as a normal saved conversation the user can reopen later.
+  const sessionId = randomUUID()
+  const entries: TranscriptEntry[] = [{ kind: 'assistant', text: finalText || '(no reply)' }]
+  if (napkin) entries.push({ kind: 'napkin', napkin })
+  writeSession(appPath, {
+    id: sessionId,
+    title: `🥤 ${p.name}`,
+    createdAt: now,
+    updatedAt: now,
+    messageCount: 2,
+    model: config.model,
+    history: [...messages, { role: 'assistant', content: finalText }],
+    entries
+  })
+
+  if (idx >= 0) {
+    list[idx] = { ...list[idx], lastRunAt: now, lastStatus: 'ok', lastError: undefined }
+    writePitchers(appPath, list)
+  }
+  if (mainWindow && !mainWindow.isFocused() && Notification.isSupported())
+    new Notification({
+      title: `Fresh pour: ${p.name}`,
+      body: finalText.slice(0, 120) || 'Ready in your history.'
+    }).show()
+
+  emitPitcher({ type: 'pitcher_finished', id: p.id, ok: true, sessionId })
+  return { id: p.id, ok: true, sessionId }
+}
+
+const scheduler = new PitcherScheduler(
+  appPath,
+  (p) => pourPitcher(p).then(() => undefined),
+  // "busy" = an interactive agent turn is in flight; never pour over the user.
+  () => currentAgentAbort !== null
+)
+
+ipcMain.handle('pitcher:list', () => readPitchers(appPath))
+
+ipcMain.handle('pitcher:save', (_event, pitcher: Pitcher) => {
+  const list = readPitchers(appPath)
+  const idx = list.findIndex((x) => x.id === pitcher.id)
+  if (idx >= 0) list[idx] = pitcher
+  else list.push(pitcher)
+  writePitchers(appPath, list)
+  scheduler.reload()
+  return list
+})
+
+ipcMain.handle('pitcher:delete', (_event, id: string) => {
+  const list = readPitchers(appPath).filter((x) => x.id !== id)
+  writePitchers(appPath, list)
+  scheduler.reload()
+  return list
+})
+
+ipcMain.handle('pitcher:run', (_event, id: string): Promise<PitcherRunResult> => {
+  const p = readPitchers(appPath).find((x) => x.id === id)
+  if (!p) return Promise.resolve({ id, ok: false, error: 'Pitcher not found' })
+  return pourPitcher(p)
+})
 
 // --- Lifecycle ---------------------------------------------------------------
 
@@ -521,9 +741,14 @@ app.whenReady().then(async () => {
   await mcp.connectAll(config.servers)
   createWindow()
 
+  // Arm scheduled Pitchers now that the window exists: runs on-open tasks and
+  // any daily task whose time was missed while the app was closed, then keeps
+  // timers for future daily fires.
+  scheduler.start()
+
   // Ensure the active model is loaded at our default context so the budget
   // doesn't revert to the small server fallback after a restart. Best-effort
-  // and non-blocking — the window is already up.
+  // and non-blocking, the window is already up.
   void lemonade
     .ensureModelLoaded()
     .then(() => console.log(`[config] active chat model on server: ${lemonade.activeModel}`))
@@ -540,5 +765,6 @@ app.on('window-all-closed', async () => {
 })
 
 app.on('before-quit', async () => {
+  scheduler.stop()
   await mcp.closeAll()
 })
