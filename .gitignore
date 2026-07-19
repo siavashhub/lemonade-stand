@@ -13,8 +13,11 @@ resources/bin/
 .env
 config/servers.local.json
 
-# Per-user app state (active model, etc.) written at runtime.
-config/settings.json
+# Per-user app state (active model, context size, etc.). The committed
+# config/settings.json ships as a clean default; a developer's own choices are
+# written to this gitignored local override so a dev checkout never commits
+# machine-specific state (mirrors config/servers.local.json).
+config/settings.local.json
 
 # Conversation history written at runtime (dev: project root, packaged: %APPDATA%).
 conversations/
