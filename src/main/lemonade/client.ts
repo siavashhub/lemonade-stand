@@ -414,6 +414,37 @@ export class LemonadeClient {
     }
   }
 
+  /**
+   * Delete a downloaded model from local storage via the server's /delete. If
+   * the model is currently loaded, the server unloads it first. Note: deleting
+   * an Omni collection removes only the collection entry — its component models
+   * stay on disk (delete those individually to reclaim their space).
+   */
+  async deleteModel(id: string): Promise<{ ok: boolean; error?: string }> {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), 60000)
+    try {
+      const response = await fetch(`${this.baseURL}/delete`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model_name: id }),
+        signal: controller.signal
+      })
+      if (!response.ok) {
+        const detail = await response.text().catch(() => '')
+        return {
+          ok: false,
+          error: `Server returned ${response.status}: ${detail || 'delete failed'}`
+        }
+      }
+      return { ok: true }
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+
   /** Normalize a raw /downloads job snapshot into the renderer's DownloadJob. */
   private mapDownload(e: DownloadEntry): DownloadJob {
     const status = (e.status ?? 'downloading') as DownloadJob['status']

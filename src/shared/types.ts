@@ -338,6 +338,9 @@ export interface RendererApi {
   listDownloads(): Promise<DownloadJob[]>
   /** Pause, cancel, or remove a server-owned model download job. */
   controlDownload(id: string, action: 'pause' | 'cancel' | 'remove'): Promise<void>
+  /** Delete a downloaded model from local storage to free up disk space.
+   * Returns the refreshed model list, or throws on failure. */
+  deleteModel(id: string): Promise<ModelInfo[]>
   /** The Market catalogue of installable tools/skills. */
   listCatalog(): Promise<CatalogEntry[]>
   /** Current state of every configured server (enabled or not). */

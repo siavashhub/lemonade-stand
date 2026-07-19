@@ -1810,6 +1810,17 @@ body {
   color: #e05a5a;
 }
 
+.btn-danger {
+  background: #e05a5a;
+  border-color: #e05a5a;
+  color: #fff;
+}
+
+.btn-danger:hover {
+  background: #d24747;
+  border-color: #d24747;
+}
+
 .card-actions button:disabled {
   opacity: 0.5;
   cursor: default;

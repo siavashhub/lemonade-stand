@@ -373,6 +373,14 @@ ipcMain.handle('agent:control-download', (_event, id: string, action: 'pause' | 
   lemonade.controlDownload(id, action)
 )
 
+// Delete a downloaded model from local storage to free up disk space. Returns
+// the refreshed model list so the UI reflects its now not-downloaded state.
+ipcMain.handle('agent:delete-model', async (_event, id: string) => {
+  const result = await lemonade.deleteModel(id)
+  if (!result.ok) throw new Error(result.error ?? 'Failed to delete model')
+  return lemonade.listModels()
+})
+
 // Renderer's answer to a tool_approval_request. Resolving the stored promise
 // unblocks the agent loop.
 ipcMain.on('agent:approve', (_event, id: string, decision: ApprovalDecision) => {

@@ -1672,6 +1672,20 @@ function Models({
     })
   }
 
+  async function remove(id: string): Promise<void> {
+    setBusyId(id)
+    setError(null)
+    try {
+      setModels(await window.api.deleteModel(id))
+      onChanged()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+      refresh()
+    } finally {
+      setBusyId(null)
+    }
+  }
+
   // Only chat models can drive the agent; surface those first and separately.
   const llms = models.filter((m) => m.type === 'llm')
   const others = models.filter((m) => m.type !== 'llm')
@@ -1717,6 +1731,7 @@ function Models({
               onLoad={() => void load(m.id)}
               onDownload={() => void download(m.id)}
               onCancelDownload={() => downloads[m.id] && void cancelDownload(downloads[m.id])}
+              onDelete={() => void remove(m.id)}
             />
           ))}
 
@@ -1732,6 +1747,7 @@ function Models({
                   onLoad={() => void load(m.id)}
                   onDownload={() => void download(m.id)}
                   onCancelDownload={() => downloads[m.id] && void cancelDownload(downloads[m.id])}
+                  onDelete={() => void remove(m.id)}
                 />
               ))}
             </>
@@ -1752,7 +1768,8 @@ function ModelCard({
   download,
   onLoad,
   onDownload,
-  onCancelDownload
+  onCancelDownload,
+  onDelete
 }: {
   model: ModelInfo
   busy: boolean
@@ -1760,7 +1777,11 @@ function ModelCard({
   onLoad: () => void
   onDownload: () => void
   onCancelDownload: () => void
+  onDelete: () => void
 }): JSX.Element {
+  // Two-step confirm for the destructive uninstall, so a stray click can't
+  // wipe a multi-GB download.
+  const [confirmDelete, setConfirmDelete] = useState(false)
   const ctx = model.maxContextWindow
     ? `${(model.maxContextWindow / 1024).toFixed(0)}K ctx`
     : null
@@ -1866,6 +1887,36 @@ function ModelCard({
           >
             {busy ? 'Loading…' : model.active ? 'Active' : model.loaded ? 'Use' : 'Load'}
           </button>
+        )}
+        {/* Uninstall is offered only for models actually on disk. A two-step
+            confirm guards the destructive delete. */}
+        {model.downloaded && !downloading && !confirmDelete && (
+          <button
+            className="btn-remove"
+            disabled={busy}
+            onClick={() => setConfirmDelete(true)}
+            title="Delete this model from disk to free up space"
+          >
+            <TrashIcon /> Uninstall
+          </button>
+        )}
+        {model.downloaded && !downloading && confirmDelete && (
+          <>
+            <button
+              className="btn-danger"
+              disabled={busy}
+              onClick={() => {
+                setConfirmDelete(false)
+                onDelete()
+              }}
+              title="Permanently delete this model's files"
+            >
+              {busy ? 'Deleting…' : 'Confirm delete'}
+            </button>
+            <button className="btn-off" disabled={busy} onClick={() => setConfirmDelete(false)}>
+              Keep
+            </button>
+          </>
         )}
       </div>
     </div>

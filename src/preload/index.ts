@@ -112,6 +112,10 @@ const api: RendererApi = {
     return ipcRenderer.invoke('agent:control-download', id, action)
   },
 
+  deleteModel(id: string) {
+    return ipcRenderer.invoke('agent:delete-model', id)
+  },
+
   listCatalog() {
     return ipcRenderer.invoke('catalog:list')
   },
