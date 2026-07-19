@@ -1,4 +1,4 @@
-# Lemonade Stand — User Guide
+# Lemonade Stand , User Guide
 
 Lemonade Stand is a desktop agent that runs a local model (served by `lemond`)
 and lets it call **tools** provided by **MCP servers**. You stock those tools
@@ -24,16 +24,16 @@ copy‑paste example prompts you can use to test each one.
 4. Restart if prompted.
 
 Under the hood this adds an entry to `config/servers.json`. You can also
-hand‑edit that file. **Only enable servers you trust** — their tools run with
+hand‑edit that file. **Only enable servers you trust**, their tools run with
 this app's privileges.
 
 ---
 
-## 1. Lemonade Gateway 🍋 (`lemonade`)
+### 1. Lemonade Gateway 🍋 (`lemonade`)
 
 Your local `lemond`'s own tools, exposed as agent tools: chat, "omni"
 multimodal, image generation, audio transcription, and model listing. No install
-needed — just point the entry's `url` at your server's `/mcp` endpoint and enable
+needed , just point the entry's `url` at your server's `/mcp` endpoint and enable
 it.
 
 **Tools:** `lemonade_list_models`, `lemonade_chat`, `lemonade_omni`,
@@ -48,12 +48,12 @@ it.
 - "Use `lemonade_omni` to describe what's in `C:\temp\lemonade-stand\photo.png`."
 
 > Note: the `/mcp` gateway is HTTP‑only and non‑streaming. TTS (spoken replies)
-> and embeddings are **not** gateway tools — the app calls those REST endpoints
+> and embeddings are **not** gateway tools, the app calls those REST endpoints
 > directly.
 
 ---
 
-## 2. Filesystem 📁 (`filesystem`) — *already tested*
+### 2. Filesystem 📁 (`filesystem`)
 
 Read and write files under a single root folder you choose. Great for letting the
 agent work with local documents and code.
@@ -74,7 +74,7 @@ agent work with local documents and code.
 
 ---
 
-## 3. Web Fetch 🌐 (`fetch`)
+### 3. Web Fetch 🌐 (`fetch`)
 
 Fetches a URL and converts the page to clean markdown so the model can read it.
 Requires `uvx` (from the [uv](https://github.com/astral-sh/uv) toolchain) on your
@@ -91,9 +91,9 @@ PATH.
 
 ---
 
-## 4. Git 🔀 (`git`)
+### 4. Git 🔀 (`git`)
 
-Inspect and operate on a local Git repository — status, diffs, log, and commits.
+Inspect and operate on a local Git repository , status, diffs, log, and commits.
 Requires `uvx`. When enabling, pick the **repository folder**.
 
 **Tools:** `git_status`, `git_diff_unstaged`, `git_diff_staged`, `git_diff`,
@@ -109,11 +109,11 @@ Requires `uvx`. When enabling, pick the **repository folder**.
 - "Show me the details of the most recent commit."
 
 > The commit/reset/checkout tools change your repo. The approval card lets you
-> review each action before it runs — deny anything you're unsure about.
+> review each action before it runs , deny anything you're unsure about.
 
 ---
 
-## 5. Memory 🧠 (`memory`)
+### 5. Memory 🧠 (`memory`)
 
 A persistent knowledge‑graph memory the agent can write to and recall across
 turns (and across restarts). Good for remembering facts about you or a project.
@@ -134,7 +134,7 @@ Requires `npx`.
 
 ---
 
-## 6. Time ⏰ (`time`)
+### 6. Time ⏰ (`time`)
 
 Current time plus timezone conversions. Requires `uvx`.
 
@@ -149,7 +149,7 @@ Current time plus timezone conversions. Requires `uvx`.
 
 ---
 
-## 7. SQLite 🗃️ (`sqlite`)
+### 7. SQLite 🗃️ (`sqlite`)
 
 Query and modify a local SQLite database file. When enabling, pick the **`.db`
 file**. Requires `uvx`.
@@ -167,6 +167,17 @@ file**. Requires `uvx`.
 - "Show me the three most expensive items in `sales`."
 
 ---
+
+## Pitchers
+(scheduled tasks) run prompts fresh on a timer or when the app opens
+  - **On-open trigger**: runs once each app launch
+  - **Daily trigger**: runs at a local HH:MM each day (with automatic catch-up on launch if the time was missed while the app was closed)
+  - **Per-task tool whitelist**: only explicitly-allowed MCP tools can auto-run during a pour; everything else is denied so scheduled tasks can't be steered into unintended actions
+  - **Bounded retry**: if a local model flakily fails to call its tools, a pour retries once
+  - **Dual output**: serve poured results to the **Napkin** panel (rich artifacts) or save as a **conversation** in history
+  - **Desktop notifications** when results are ready and the window isn't focused
+  - **Managed from a new Pitchers panel**: create, edit, enable/disable, manually "Pour now", and see last-run status + errors
+  - **Graceful serialization**: pours never collide with interactive chat turns; they queue and run when the user isn't typing
 
 ## Quick test checklist
 
@@ -196,3 +207,4 @@ file**. Requires `uvx`.
   server downloads it, which can take a moment. Check the app logs for errors.
 - **Confirm what's loaded.** Ask the agent *"What tools do you have?"* at any
   time.
+

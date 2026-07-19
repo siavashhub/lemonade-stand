@@ -1,5 +1,5 @@
 {
-  "$schema-note": "Configured MCP servers. Managed by the app's Pantry UI, but hand-editable too. `enabled: false` entries are ignored at startup. Two transports: 'stdio' (spawns a subprocess) and 'http' (Streamable HTTP). Only enable servers you trust — their tools run with this app's privileges. Browse more tools to add in config/catalog.json.",
+  "$schema-note": "Configured MCP servers. Managed by the app's Pantry UI, but hand-editable too. `enabled: false` entries are ignored at startup. Two transports: 'stdio' (spawns a subprocess) and 'http' (Streamable HTTP). Only enable servers you trust, their tools run with this app's privileges. Browse more tools to add in config/catalog.json.",
   "servers": [
     {
       "id": "lemonade",
@@ -27,6 +27,19 @@
         "mcp-server-time"
       ],
       "enabled": true
+    },
+    {
+      "id": "fetch",
+      "transport": "stdio",
+      "command": "uvx",
+      "args": [
+        "mcp-server-fetch",
+        "--user-agent",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+        "--ignore-robots-txt"
+      ],
+      "enabled": true,
+      "note": "Default bot User-Agent gets 429'd by sites like yahoo.com. A browser UA avoids most rate-limit blocks. Some sites (e.g. yahoo.com root) may still 429 or need a specific article URL."
     }
   ]
 }

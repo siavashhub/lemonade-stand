@@ -27,7 +27,7 @@ function Icon({ children, ...props }: IconProps & { children: JSX.Element }): JS
   )
 }
 
-// stop — halt an in-flight request (filled rounded square)
+// stop , halt an in-flight request (filled rounded square)
 export function StopIcon(props: IconProps): JSX.Element {
   return (
     <Icon {...props}>
@@ -36,7 +36,7 @@ export function StopIcon(props: IconProps): JSX.Element {
   )
 }
 
-// speaker-wave — spoken replies on
+// speaker-wave , spoken replies on
 export function SpeakerWaveIcon(props: IconProps): JSX.Element {
   return (
     <Icon {...props}>
@@ -48,7 +48,7 @@ export function SpeakerWaveIcon(props: IconProps): JSX.Element {
   )
 }
 
-// speaker with pause bars — shown while a spoken reply is playing; clicking it
+// speaker with pause bars , shown while a spoken reply is playing; clicking it
 // stops the speech. Keeps the speaker body but replaces the sound waves with
 // pause bars so it reads as "halt the voice" (distinct from the send-stop icon).
 export function StopSpeakingIcon(props: IconProps): JSX.Element {
@@ -62,7 +62,7 @@ export function StopSpeakingIcon(props: IconProps): JSX.Element {
   )
 }
 
-// speaker-x-mark — spoken replies off
+// speaker-x-mark , spoken replies off
 export function SpeakerXMarkIcon(props: IconProps): JSX.Element {
   return (
     <Icon {...props}>
@@ -74,7 +74,7 @@ export function SpeakerXMarkIcon(props: IconProps): JSX.Element {
   )
 }
 
-// cpu-chip — model selector
+// cpu-chip , model selector
 export function CpuChipIcon(props: IconProps): JSX.Element {
   return (
     <Icon {...props}>
@@ -83,7 +83,7 @@ export function CpuChipIcon(props: IconProps): JSX.Element {
   )
 }
 
-// archive-box — the Pantry
+// archive-box , the Pantry
 export function ArchiveBoxIcon(props: IconProps): JSX.Element {
   return (
     <Icon {...props}>
@@ -92,7 +92,16 @@ export function ArchiveBoxIcon(props: IconProps): JSX.Element {
   )
 }
 
-// microphone — dictate a message with the mic
+// beaker , a Pitcher (scheduled task), poured fresh on a timer
+export function PitcherIcon(props: IconProps): JSX.Element {
+  return (
+    <Icon {...props}>
+      <path d="M9.75 3.104v5.714a2.25 2.25 0 0 1-.659 1.591L5 14.5M9.75 3.104c-.251.023-.501.05-.75.082m.75-.082a24.301 24.301 0 0 1 4.5 0m0 0v5.714c0 .597.237 1.17.659 1.591L19.8 15.3M14.25 3.104c.251.023.501.05.75.082M19.8 15.3l-1.57.393A9.065 9.065 0 0 1 12 15a9.065 9.065 0 0 0-6.23-.693L5 14.5m14.8.8 1.402 1.402c1.232 1.232.65 3.318-1.067 3.611A48.309 48.309 0 0 1 12 21c-2.773 0-5.491-.235-8.135-.687-1.718-.293-2.3-2.379-1.067-3.61L5 14.5" />
+    </Icon>
+  )
+}
+
+// microphone , dictate a message with the mic
 export function MicrophoneIcon(props: IconProps): JSX.Element {
   return (
     <Icon {...props}>
@@ -101,7 +110,7 @@ export function MicrophoneIcon(props: IconProps): JSX.Element {
   )
 }
 
-// clock — the conversation history sidebar
+// clock , the conversation history sidebar
 export function ClockIcon(props: IconProps): JSX.Element {
   return (
     <Icon {...props}>
@@ -110,11 +119,41 @@ export function ClockIcon(props: IconProps): JSX.Element {
   )
 }
 
-// trash — delete a saved conversation
+// arrow-down-tray , download a model to the server
+export function ArrowDownTrayIcon(props: IconProps): JSX.Element {
+  return (
+    <Icon {...props}>
+      <path d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5M16.5 12 12 16.5m0 0L7.5 12m4.5 4.5V3" />
+    </Icon>
+  )
+}
+
+// trash , delete a saved conversation
 export function TrashIcon(props: IconProps): JSX.Element {
   return (
     <Icon {...props}>
       <path d="m14.74 9-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 0 1-2.244 2.077H8.084a2.25 2.25 0 0 1-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 0 0-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 0 1 3.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 0 0-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 0 0-7.5 0" />
+    </Icon>
+  )
+}
+
+// shield-check , tool approvals enforced (the default guard is on)
+export function ShieldCheckIcon(props: IconProps): JSX.Element {
+  return (
+    <Icon {...props}>
+      <path d="M9 12.75 11.25 15 15 9.75m-3-7.036A11.959 11.959 0 0 1 3.598 6 11.99 11.99 0 0 0 3 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285Z" />
+    </Icon>
+  )
+}
+
+// shield with a slash , approvals bypassed for the session
+export function ShieldSlashIcon(props: IconProps): JSX.Element {
+  return (
+    <Icon {...props}>
+      <>
+        <path d="M12 2.714A11.959 11.959 0 0 1 3.598 6 11.99 11.99 0 0 0 3 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285Z" />
+        <path d="M4.5 4.5l15 15" />
+      </>
     </Icon>
   )
 }

@@ -3,11 +3,12 @@ import type {
   AgentEvent,
   ApprovalDecision,
   ChatMessage,
+  PitcherEvent,
   RendererApi
 } from '@shared/types'
 
 // The only bridge between the sandboxed renderer and the Node-privileged main
-// process. Keep this surface small and explicit — the renderer can do nothing
+// process. Keep this surface small and explicit , the renderer can do nothing
 // the methods below don't allow.
 const api: RendererApi = {
   // Read from the --app-debug=<0|1> argument injected via webPreferences
@@ -40,8 +41,16 @@ const api: RendererApi = {
     ipcRenderer.send('agent:approve', id, decision)
   },
 
+  setBypassApprovals(enabled: boolean): void {
+    ipcRenderer.send('agent:set-bypass', enabled)
+  },
+
   respondStepLimit(id: string, cont: boolean): void {
     ipcRenderer.send('agent:continue', id, cont)
+  },
+
+  respondNapkinChoice(id: string, choiceId: string): void {
+    ipcRenderer.send('agent:napkin-choice', id, choiceId)
   },
 
   setSpeak(enabled: boolean): Promise<boolean> {
@@ -100,6 +109,22 @@ const api: RendererApi = {
     return ipcRenderer.invoke('agent:load-model', id, ctxSize)
   },
 
+  downloadModel(id: string) {
+    return ipcRenderer.invoke('agent:download-model', id)
+  },
+
+  listDownloads() {
+    return ipcRenderer.invoke('agent:list-downloads')
+  },
+
+  controlDownload(id: string, action: 'pause' | 'cancel' | 'remove') {
+    return ipcRenderer.invoke('agent:control-download', id, action)
+  },
+
+  deleteModel(id: string) {
+    return ipcRenderer.invoke('agent:delete-model', id)
+  },
+
   listCatalog() {
     return ipcRenderer.invoke('catalog:list')
   },
@@ -146,6 +171,28 @@ const api: RendererApi = {
 
   suggestTitle(history: ChatMessage[]) {
     return ipcRenderer.invoke('history:suggest-title', history)
+  },
+
+  listPitchers() {
+    return ipcRenderer.invoke('pitcher:list')
+  },
+
+  savePitcher(pitcher) {
+    return ipcRenderer.invoke('pitcher:save', pitcher)
+  },
+
+  deletePitcher(id: string) {
+    return ipcRenderer.invoke('pitcher:delete', id)
+  },
+
+  runPitcher(id: string) {
+    return ipcRenderer.invoke('pitcher:run', id)
+  },
+
+  onPitcherEvent(handler: (event: PitcherEvent) => void): () => void {
+    const listener = (_event: unknown, payload: PitcherEvent): void => handler(payload)
+    ipcRenderer.on('pitcher:event', listener)
+    return () => ipcRenderer.removeListener('pitcher:event', listener)
   },
 
   minimizeWindow(): void {

@@ -3,7 +3,7 @@ import type {
   ChatCompletionMessageParam,
   ChatCompletionTool
 } from 'openai/resources/chat/completions'
-import type { ContextBreakdown, ContextInfo, ModelInfo } from '@shared/types'
+import type { ContextBreakdown, ContextInfo, DownloadJob, ModelInfo } from '@shared/types'
 // Fallback context window used only when no override is configured and the
 // server can't be reached to report the loaded model's runtime context.
 const DEFAULT_CONTEXT_SIZE = 4096
@@ -40,6 +40,25 @@ interface HealthModel {
 interface HealthResponse {
   model_loaded?: string
   all_models_loaded?: HealthModel[]
+}
+
+// Shape (subset) of a Lemonade /downloads job snapshot. Byte totals come under
+// several aliases depending on server version; we read the most complete one.
+interface DownloadEntry {
+  id?: string
+  model_name?: string
+  status?: string
+  running?: boolean
+  file_index?: number
+  total_files?: number
+  bytes_total?: number
+  total_download_size?: number
+  cumulative_bytes_downloaded?: number
+  overall_bytes_downloaded?: number
+  bytes_downloaded?: number
+  percent?: number
+  complete?: boolean
+  error?: string
 }
 
 // Result of comparing an outgoing request against the model's context budget.
@@ -168,7 +187,7 @@ export class LemonadeClient {
       const models = body.all_models_loaded ?? []
       // Prefer the entry matching our configured chat model; otherwise fall back
       // to whatever LLM the server currently has loaded. Omni collections have
-      // no backend of their own — chat runs on a loaded LLM component — so the
+      // no backend of their own , chat runs on a loaded LLM component , so the
       // collection name never matches an LLM here; the loaded-LLM fallbacks
       // resolve context from that component instead of dropping to the default.
       return (
@@ -211,32 +230,40 @@ export class LemonadeClient {
   /**
    * List the models the server knows about, merged with which one is currently
    * loaded (from /health). A model is flagged `agentReady` when its labels
-   * advertise tool-calling — the capability the agent loop depends on.
+   * advertise tool-calling , the capability the agent loop depends on.
    */
   async listModels(): Promise<ModelInfo[]> {
-    const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(), 5000)
-    let entries: ModelsEntry[] = []
+    // 1. The plain /models list reports only *downloaded* models. We use it as
+    //    the authoritative "is this on disk?" signal, since the full catalogue
+    //    (below) can under-report downloaded state for pointer-based Omni
+    //    collections whose components are already present.
+    const downloadedIds = new Set<string>()
+    let downloadedEntries: ModelsEntry[] = []
     try {
-      const response = await fetch(`${this.baseURL}/models`, {
-        method: 'GET',
-        signal: controller.signal
-      })
-      if (response.ok) {
-        const body = (await response.json()) as { data?: ModelsEntry[] }
-        entries = body.data ?? []
+      const controller = new AbortController()
+      const timer = setTimeout(() => controller.abort(), 5000)
+      try {
+        const response = await fetch(`${this.baseURL}/models`, {
+          method: 'GET',
+          signal: controller.signal
+        })
+        if (response.ok) {
+          const body = (await response.json()) as { data?: ModelsEntry[] }
+          downloadedEntries = body.data ?? []
+          for (const e of downloadedEntries) if (e.id) downloadedIds.add(e.id)
+        }
+      } finally {
+        clearTimeout(timer)
       }
     } catch {
-      // Server unreachable -> return an empty list; the UI shows an empty state.
-    } finally {
-      clearTimeout(timer)
+      // Server unreachable -> handled below; the UI shows an empty state.
     }
 
-    // The default list only reports downloaded models. Omni router models
-    // (recipe 'collection.omni') are usually not downloaded, so pull the full
-    // catalogue with show_all=true and merge in just the Omni entries — we want
-    // to surface them for agentic use without flooding the list with every
-    // supported model.
+    // 2. The full catalogue (show_all=true) is the source of truth for *which*
+    //    models to display, so not-yet-downloaded models , and models the user
+    //    just uninstalled , stay visible with a Download button instead of
+    //    vanishing from the list.
+    let entries: ModelsEntry[] = []
     try {
       const controllerAll = new AbortController()
       const timerAll = setTimeout(() => controllerAll.abort(), 5000)
@@ -247,17 +274,17 @@ export class LemonadeClient {
         })
         if (response.ok) {
           const body = (await response.json()) as { data?: ModelsEntry[] }
-          const known = new Set(entries.map((e) => e.id))
-          for (const e of body.data ?? []) {
-            if (e.recipe === 'collection.omni' && !known.has(e.id)) entries.push(e)
-          }
+          entries = body.data ?? []
         }
       } finally {
         clearTimeout(timerAll)
       }
     } catch {
-      // Best-effort; if this fails we simply don't surface undownloaded Omni.
+      // Best-effort; fall back to the downloaded-only list below.
     }
+    // If the full catalogue couldn't be fetched, fall back to whatever the
+    // downloaded-only list returned so the picker still works offline-ish.
+    if (entries.length === 0) entries = downloadedEntries
 
     // Which model ids are currently loaded, per /health.
     const loaded = new Set<string>()
@@ -305,7 +332,10 @@ export class LemonadeClient {
         labels,
         maxContextWindow: e.max_context_window,
         sizeGb: e.size,
-        downloaded: e.downloaded ?? false,
+        // Trust the authoritative downloaded-only list first; the full catalogue
+        // can report a pointer Omni collection as not-downloaded even when its
+        // components are already on disk.
+        downloaded: (e.id ? downloadedIds.has(e.id) : false) || (e.downloaded ?? false),
         loaded: e.id ? loaded.has(e.id) : false,
         agentReady: labels.includes('tool-calling') || omni,
         omni,
@@ -395,6 +425,127 @@ export class LemonadeClient {
     }
   }
 
+  /**
+   * Delete a downloaded model from local storage via the server's /delete. If
+   * the model is currently loaded, the server unloads it first. Note: deleting
+   * an Omni collection removes only the collection entry , its component models
+   * stay on disk (delete those individually to reclaim their space).
+   */
+  async deleteModel(id: string): Promise<{ ok: boolean; error?: string }> {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), 60000)
+    try {
+      const response = await fetch(`${this.baseURL}/delete`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model_name: id }),
+        signal: controller.signal
+      })
+      if (!response.ok) {
+        const detail = await response.text().catch(() => '')
+        return {
+          ok: false,
+          error: `Server returned ${response.status}: ${detail || 'delete failed'}`
+        }
+      }
+      return { ok: true }
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+
+  /** Normalize a raw /downloads job snapshot into the renderer's DownloadJob. */
+  private mapDownload(e: DownloadEntry): DownloadJob {
+    const status = (e.status ?? 'downloading') as DownloadJob['status']
+    return {
+      id: e.id ?? (e.model_name ? `model:${e.model_name}` : ''),
+      modelName: e.model_name ?? '',
+      status: ['downloading', 'paused', 'cancelled', 'completed', 'error'].includes(status)
+        ? status
+        : 'downloading',
+      running: e.running ?? false,
+      percent: typeof e.percent === 'number' ? e.percent : 0,
+      // Prefer the whole-job cumulative total; fall back to the per-file count.
+      bytesDownloaded:
+        e.cumulative_bytes_downloaded ??
+        e.overall_bytes_downloaded ??
+        e.bytes_downloaded ??
+        0,
+      bytesTotal: e.total_download_size || e.bytes_total || 0,
+      fileIndex: e.file_index,
+      totalFiles: e.total_files,
+      complete: e.complete ?? false,
+      error: e.error
+    }
+  }
+
+  /**
+   * Kick off a *server-owned* background download of a model via /pull with
+   * `stream:true, subscribe:false`. The server starts the job and returns a
+   * snapshot immediately; the download then proceeds independently of this
+   * connection, so it survives a renderer reload. Poll {@link listDownloads} to
+   * track progress. Returns the initial job snapshot.
+   */
+  async startDownload(id: string): Promise<DownloadJob> {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), 30000)
+    try {
+      const response = await fetch(`${this.baseURL}/pull`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model_name: id, stream: true, subscribe: false }),
+        signal: controller.signal
+      })
+      if (!response.ok) {
+        const detail = await response.text().catch(() => '')
+        throw new Error(`Server returned ${response.status}: ${detail || 'download failed'}`)
+      }
+      const body = (await response.json()) as DownloadEntry
+      return this.mapDownload({ ...body, model_name: body.model_name ?? id })
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+
+  /** List the server's current model download jobs (for live progress). */
+  async listDownloads(): Promise<DownloadJob[]> {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), 5000)
+    try {
+      const response = await fetch(`${this.baseURL}/downloads`, {
+        method: 'GET',
+        signal: controller.signal
+      })
+      if (!response.ok) return []
+      const body = (await response.json()) as DownloadEntry[]
+      return (body ?? []).filter((e) => e.model_name).map((e) => this.mapDownload(e))
+    } catch {
+      return []
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+
+  /** Pause, cancel, or remove a server-owned model download job. */
+  async controlDownload(id: string, action: 'pause' | 'cancel' | 'remove'): Promise<void> {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), 10000)
+    try {
+      await fetch(`${this.baseURL}/downloads/control`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id, action }),
+        signal: controller.signal
+      })
+    } catch {
+      // Best-effort; the next poll reflects the real job state regardless.
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+
   /** Fetch a single model's registry entry from /models/{id}, or null. */
   private async fetchModelEntry(id: string): Promise<ModelsEntry | null> {
     const controller = new AbortController()
@@ -458,7 +609,7 @@ export class LemonadeClient {
     try {
       // Omni collections have no backend of their own: chat runs through the
       // server's collection orchestrator, which (re)loads each component from
-      // its *saved* recipe_options.json — a transient ctx_size sent to the
+      // its *saved* recipe_options.json , a transient ctx_size sent to the
       // collection is never forwarded to its parts. So target the loaded LLM
       // component directly and persist the size (save_options) so the next
       // collection turn doesn't reload the component back to its old default.
@@ -621,8 +772,8 @@ export class LemonadeClient {
    * reassembled result. This is deliberate and load-bearing for the stop
    * button: with a non-streamed request, aborting the fetch closes the socket,
    * but the OpenAI-compatible backend (llama.cpp / OGA) doesn't notice the
-   * client is gone until it writes the response — which never happens until the
-   * whole reply is generated — so it keeps the GPU/NPU busy to completion (the
+   * client is gone until it writes the response , which never happens until the
+   * whole reply is generated , so it keeps the GPU/NPU busy to completion (the
    * fan keeps spinning). Streaming makes the backend write a chunk per token,
    * so the dropped connection is detected on the next token and generation
    * stops promptly when the user hits stop.
@@ -758,7 +909,7 @@ export class LemonadeClient {
    * Synthesize speech via lemond's OpenAI-compatible /v1/audio/speech endpoint
    * (backed by Kokoro TTS). Returns base64-encoded audio bytes plus the format
    * so the renderer can wrap them in the right MIME type. `stream=true` isn't
-   * needed here — replies are short and we play them as one clip. The model id
+   * needed here , replies are short and we play them as one clip. The model id
    * is resolved against the server so a stale/renamed voice can't silently
    * break playback.
    */

@@ -115,7 +115,7 @@ jobs:
     needs: [gate, audit, build]
     runs-on: ubuntu-latest
     # Publish as long as the gate and audit passed and the run wasn't cancelled,
-    # even if one platform's build failed — so a single flaky/broken OS leg can't
+    # even if one platform's build failed, so a single flaky/broken OS leg can't
     # block shipping the installers that did build successfully.
     if: ${{ !cancelled() && needs.gate.result == 'success' && needs.audit.result == 'success' }}
     steps:

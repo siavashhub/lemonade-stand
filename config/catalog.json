@@ -37,7 +37,7 @@
     {
       "id": "git",
       "name": "Git",
-      "blurb": "Inspect and operate on a local Git repository — status, diffs, log, and commits.",
+      "blurb": "Inspect and operate on a local Git repository: status, diffs, log, and commits.",
       "category": "Dev",
       "transport": "stdio",
       "command": "uvx",
