@@ -18,6 +18,15 @@
         "C:\\temp\\lemonade-stand"
       ],
       "enabled": true
+    },
+    {
+      "id": "time",
+      "transport": "stdio",
+      "command": "uvx",
+      "args": [
+        "mcp-server-time"
+      ],
+      "enabled": true
     }
   ]
 }

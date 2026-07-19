@@ -19,6 +19,15 @@ extraResources:
     to: config
   - from: resources
     to: resources
+    # The uv binaries are bundled separately below (-> <resources>/bin); don't
+    # also duplicate them under <resources>/resources/bin.
+    filter:
+      - '**/*'
+      - '!bin/**'
+  # Platform-specific uv/uvx binaries (populated by scripts/fetch-uv.mjs before
+  # packaging) so the uvx-based MCP servers work without the user installing uv.
+  - from: resources/bin
+    to: bin
 
 # Deterministic artifact names that carry the semantic version, e.g.
 # "Lemonade Stand-0.0.1-setup.exe".
