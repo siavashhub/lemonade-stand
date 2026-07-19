@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import type { CatalogEntry, McpServerConfig, Pitcher } from '@shared/types'
 
@@ -69,14 +69,10 @@ export interface AppConfig {
 export function loadConfig(cwd: string = process.cwd()): AppConfig {
   loadDotEnv(cwd)
 
-  let servers: McpServerConfig[] = []
-  try {
-    const raw = readFileSync(resolve(cwd, 'config/servers.json'), 'utf8')
-    const parsed = JSON.parse(raw) as { servers?: McpServerConfig[] }
-    servers = (parsed.servers ?? []).filter((s) => s.enabled)
-  } catch {
-    // No server config -> agent runs chat-only with no external tools.
-  }
+  // Base defaults live in the committed config/servers.json; a developer's
+  // personal edits layer over them from the gitignored config/servers.local.json
+  // (see readServers). Only enabled servers are launched.
+  const servers = readServers(cwd).filter((s) => s.enabled)
 
   // Values the user sets in the app's UI (model, server connection) are
   // remembered across restarts in settings.json. A UI choice is explicit, so it
@@ -132,6 +128,9 @@ const DEFAULT_SYSTEM_PROMPT =
   'Skip planning for simple, one-step requests.'
 
 const SERVERS_FILE = 'config/servers.json'
+// Optional, gitignored per-developer override merged over SERVERS_FILE. Keeps
+// local server tweaks out of the tracked defaults (and out of `git status`).
+const SERVERS_LOCAL_FILE = 'config/servers.local.json'
 const CATALOG_FILE = 'config/catalog.json'
 const PHRASES_FILE = 'config/phrases.json'
 const SETTINGS_FILE = 'config/settings.json'
@@ -194,20 +193,50 @@ export function loadThinkingPhrases(cwd: string): string[] {
   }
 }
 
-/** Read every configured server (enabled and disabled) from disk. */
-export function readServers(cwd: string): McpServerConfig[] {
+/** Read one server-config file's `servers` array; null when the file is absent. */
+function readServersFile(cwd: string, file: string): McpServerConfig[] | null {
   try {
-    const raw = readFileSync(resolve(cwd, SERVERS_FILE), 'utf8')
+    const raw = readFileSync(resolve(cwd, file), 'utf8')
     const parsed = JSON.parse(raw) as { servers?: McpServerConfig[] }
     return parsed.servers ?? []
   } catch {
-    return []
+    return null
   }
 }
 
-/** Persist the server list, preserving any sibling keys (e.g. the schema-note). */
+/** Layer a local override list over the base list, keyed by server id: a local
+ * entry replaces the same-id base entry in place; brand-new ids are appended. */
+function mergeServers(
+  base: McpServerConfig[],
+  local: McpServerConfig[]
+): McpServerConfig[] {
+  const byId = new Map(base.map((s) => [s.id, s]))
+  const order = base.map((s) => s.id)
+  for (const s of local) {
+    if (!byId.has(s.id)) order.push(s.id)
+    byId.set(s.id, s)
+  }
+  return order.map((id) => byId.get(id) as McpServerConfig)
+}
+
+/** Read every configured server (enabled and disabled), with the gitignored
+ * local override (config/servers.local.json) merged over the committed defaults.
+ * A developer's personal server edits live only in the local file, so the tracked
+ * config/servers.json never picks up local churn. */
+export function readServers(cwd: string): McpServerConfig[] {
+  const base = readServersFile(cwd, SERVERS_FILE) ?? []
+  const local = readServersFile(cwd, SERVERS_LOCAL_FILE)
+  return local ? mergeServers(base, local) : base
+}
+
+/** Persist the server list, preserving any sibling keys (e.g. the schema-note).
+ * Writes to the gitignored local override when it exists, so UI edits in a dev
+ * checkout don't dirty the tracked config/servers.json. */
 export function writeServers(cwd: string, servers: McpServerConfig[]): void {
-  const path = resolve(cwd, SERVERS_FILE)
+  const target = existsSync(resolve(cwd, SERVERS_LOCAL_FILE))
+    ? SERVERS_LOCAL_FILE
+    : SERVERS_FILE
+  const path = resolve(cwd, target)
   let existing: Record<string, unknown> = {}
   try {
     existing = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>
