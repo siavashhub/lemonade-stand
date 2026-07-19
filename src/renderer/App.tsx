@@ -268,6 +268,7 @@ export function App(): JSX.Element {
   const [sessionId, setSessionId] = useState<string>(() => crypto.randomUUID())
   const [currentTitle, setCurrentTitle] = useState('')
   const createdAtRef = useRef<number>(Date.now())
+  const inputRef = useRef<HTMLTextAreaElement>(null)
   // Set right before loading a saved session so the autosave effect skips the
   // render caused purely by the load (which would otherwise bump updatedAt).
   const suppressSaveRef = useRef(false)
@@ -382,6 +383,9 @@ export function App(): JSX.Element {
     setPlanExpanded(false)
     setNapkin(null)
     setNapkinChoice(null)
+    // Move focus to the composer so the user can immediately start typing
+    // instead of leaving focus on the button (which would swallow keystrokes).
+    requestAnimationFrame(() => inputRef.current?.focus())
   }
 
   // Load a saved conversation into the live view so the user can continue it.
@@ -1044,6 +1048,7 @@ export function App(): JSX.Element {
 
       <div className={`composer ${busy || transcribing ? 'working' : ''}`}>
         <textarea
+          ref={inputRef}
           value={input}
           placeholder={
             recording
