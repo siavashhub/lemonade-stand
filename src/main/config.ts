@@ -331,6 +331,46 @@ export function writePitchers(cwd: string, pitchers: Pitcher[]): void {
   writeFileSync(path, JSON.stringify({ ...existing, pitchers }, null, 2) + '\n', 'utf8')
 }
 
+// Seed content for the gitignored local override files. Each starts empty so it
+// contributes no overrides (the committed defaults still show), but its mere
+// existence redirects the app's writes here. The `$schema-note` documents the
+// file for a developer who spots it after a fresh clone.
+const LOCAL_OVERRIDE_SEEDS: Record<string, Record<string, unknown>> = {
+  [SERVERS_LOCAL_FILE]: {
+    '$schema-note':
+      'LOCAL, gitignored per-developer override. Entries here are merged over config/servers.json by server id (same id replaces the committed default; new ids are appended). The app writes your personal server edits here so the tracked config/servers.json stays clean.',
+    servers: []
+  },
+  [SETTINGS_LOCAL_FILE]: {
+    '$schema-note':
+      'LOCAL, gitignored per-developer override merged over config/settings.json. The app writes your personal UI state (model, connection, context size, …) here so the tracked config/settings.json stays clean.'
+  },
+  [PITCHERS_LOCAL_FILE]: {
+    '$schema-note':
+      'LOCAL, gitignored per-developer override. Entries here are merged over config/pitchers.json by pitcher id (same id replaces the committed default; new ids are appended). The app writes your personal scheduled-task edits here so the tracked config/pitchers.json stays clean.',
+    pitchers: []
+  }
+}
+
+/** Seed the gitignored local override files (servers/settings/pitchers) if they
+ * don't exist yet. Call this only in a dev checkout (`!app.isPackaged`): it makes
+ * the app write UI edits to the `*.local.json` overrides instead of dirtying the
+ * committed defaults, and — because the seeded files are visible and self-
+ * documenting — a developer cloning the repo discovers the mechanism on first
+ * run. Packaged builds skip this: they seed a writable per-user copy elsewhere. */
+export function seedLocalOverrides(cwd: string): void {
+  for (const [file, seed] of Object.entries(LOCAL_OVERRIDE_SEEDS)) {
+    const path = resolve(cwd, file)
+    if (existsSync(path)) continue
+    try {
+      writeFileSync(path, JSON.stringify(seed, null, 2) + '\n', 'utf8')
+    } catch {
+      // A failed seed is non-fatal: the app falls back to writing the tracked
+      // default, exactly as before this helper existed.
+    }
+  }
+}
+
 /** The Market catalogue of installable tools/skills. */
 export function loadCatalog(cwd: string): CatalogEntry[] {
   try {

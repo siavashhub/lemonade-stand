@@ -22,6 +22,7 @@ import {
   pathForServer,
   readPitchers,
   readServers,
+  seedLocalOverrides,
   serverFromCatalog,
   withServerPath,
   writePitchers,
@@ -52,7 +53,15 @@ const __dirname = fileURLToPath(new URL('.', import.meta.url))
 // packaged app starting empty (no Pantry catalogue, no configured servers)
 // because it was looking for `config/` inside the read-only asar.
 function resolveConfigDir(): string {
-  if (!app.isPackaged) return app.getAppPath()
+  if (!app.isPackaged) {
+    // Dev checkout: seed the gitignored *.local.json overrides so the app writes
+    // UI edits there instead of dirtying the committed defaults, and a developer
+    // cloning the repo discovers the mechanism from the seeded, self-documenting
+    // files on first `npm run dev`.
+    const devConfigDir = app.getAppPath()
+    seedLocalOverrides(devConfigDir)
+    return devConfigDir
+  }
 
   const userConfigBase = app.getPath('userData')
   const userConfigDir = join(userConfigBase, 'config')
