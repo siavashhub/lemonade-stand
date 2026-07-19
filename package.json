@@ -1,6 +1,6 @@
 {
   "name": "lemonade-stand",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "A desktop MCP client / agent host that drives local models served by Lemonade (lemond) over HTTP.",
   "author": "",
   "license": "Apache-2.0",
@@ -19,13 +19,16 @@
     "test:optional": "cross-env RUN_UVX_TESTS=1 vitest run",
     "check-release": "node scripts/check-release.mjs",
     "audit": "npm audit --audit-level=high",
-    "package": "electron-vite build && electron-builder",
-    "package:win": "electron-vite build && electron-builder --win",
-    "package:mac": "electron-vite build && electron-builder --mac",
-    "package:linux": "electron-vite build && electron-builder --linux"
+    "fetch-uv": "node scripts/fetch-uv.mjs",
+    "package": "node scripts/fetch-uv.mjs && electron-vite build && electron-builder",
+    "package:win": "node scripts/fetch-uv.mjs && electron-vite build && electron-builder --win",
+    "package:mac": "node scripts/fetch-uv.mjs && electron-vite build && electron-builder --mac",
+    "package:linux": "node scripts/fetch-uv.mjs && electron-vite build && electron-builder --linux"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.0",
+    "@modelcontextprotocol/server-filesystem": "^2026.7.10",
+    "@modelcontextprotocol/server-memory": "^2026.7.4",
     "openai": "^4.77.0"
   },
   "devDependencies": {
