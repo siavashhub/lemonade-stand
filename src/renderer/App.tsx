@@ -1391,6 +1391,7 @@ export function App(): JSX.Element {
                 console.error('Failed to open folder:', err)
               }
             }}
+            isAutoCreated={napkin?.kind === 'markdown' && napkin?.content?.includes('📂 **Saved to:**')}
           />
         )}
         {showNapkinCreator && (
@@ -2985,7 +2986,8 @@ function NapkinPanel({
   theme,
   onChoose,
   onClose,
-  onOpenFolder
+  onOpenFolder,
+  isAutoCreated
 }: {
   napkin: Napkin | null
   choice: { id: string; title: string; prompt: string; choices: NapkinChoice[] } | null
@@ -2993,10 +2995,12 @@ function NapkinPanel({
   onChoose: (choiceId: string) => void
   onClose: () => void
   onOpenFolder?: (path: string) => void
+  isAutoCreated?: boolean
 }): JSX.Element {
   const [copied, setCopied] = useState(false)
   // Only text-based artifacts have a copyable source; images don't.
-  const canCopy = napkin !== null && napkin.kind !== 'image'
+  // Also hide copy for auto-created file save napkins
+  const canCopy = napkin !== null && napkin.kind !== 'image' && !isAutoCreated
 
   async function copySource(): Promise<void> {
     if (!napkin) return
