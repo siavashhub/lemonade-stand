@@ -2189,6 +2189,7 @@ button.server-status:hover {
   display: flex;
   align-items: stretch;
   gap: 6px;
+  flex-shrink: 0;
   border: 1px solid var(--border);
   border-radius: 10px;
   background: var(--panel);
@@ -2208,6 +2209,7 @@ button.server-status:hover {
 
 .history-open {
   flex: 1;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 5px;
@@ -2228,6 +2230,8 @@ button.server-status:hover {
   font-weight: 600;
   font-size: 13px;
   line-height: 1.3;
+  overflow-wrap: anywhere;
+  width: 100%;
 }
 
 .history-meta {

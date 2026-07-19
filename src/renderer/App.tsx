@@ -1384,6 +1384,7 @@ export function App(): JSX.Element {
         )}
         {showNapkinCreator && (
           <NapkinCreatorModal
+            defaultTitle={currentTitle || 'Untitled'}
             onClose={() => setShowNapkinCreator(false)}
             onCreateNapkin={(napkin) => {
               setNapkin(napkin)
@@ -3141,23 +3142,46 @@ function MermaidNapkin({ napkin, theme }: { napkin: Napkin; theme: Theme }): JSX
 }
 
 // Modal for creating a napkin manually. User picks a kind (code, markdown, etc.)
-// and optionally fills in initial content. Creates and displays the napkin.
+// and fills in content. Auto-populates smart defaults for diagram types (mermaid, svg).
 function NapkinCreatorModal({
+  defaultTitle,
   onClose,
   onCreateNapkin
 }: {
+  defaultTitle: string
   onClose: () => void
   onCreateNapkin: (napkin: Napkin) => void
 }): JSX.Element {
   const [selectedKind, setSelectedKind] = useState<NapkinKind>('code')
-  const [title, setTitle] = useState('Untitled')
+  const [title, setTitle] = useState(defaultTitle)
   const [content, setContent] = useState('')
 
   const kinds: NapkinKind[] = ['code', 'markdown', 'mermaid', 'svg', 'image']
 
+  // Smart defaults for diagram types
+  const getDefaultContent = (kind: NapkinKind): string => {
+    if (kind === 'mermaid') {
+      return 'graph TD\n  A[Start] --> B[Process]\n  B --> C{Decision}\n  C -->|Yes| D[End]\n  C -->|No| B'
+    }
+    if (kind === 'svg') {
+      return '<svg viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">\n  <circle cx="100" cy="100" r="80" fill="#f39c12" stroke="#333" stroke-width="2"/>\n  <text x="100" y="105" text-anchor="middle" font-size="20" font-weight="bold">SVG</text>\n</svg>'
+    }
+    return ''
+  }
+
+  function handleKindChange(kind: NapkinKind): void {
+    setSelectedKind(kind)
+    // Auto-populate content for mermaid and svg
+    if (kind === 'mermaid' || kind === 'svg') {
+      setContent(getDefaultContent(kind))
+    } else {
+      setContent('')
+    }
+  }
+
   function handleCreate(): void {
     const napkin: Napkin = {
-      title: title.trim() || 'Untitled',
+      title: title.trim() || defaultTitle,
       kind: selectedKind,
       content: content.trim(),
       language: selectedKind === 'code' ? 'js' : undefined,
@@ -3197,7 +3221,7 @@ function NapkinCreatorModal({
                 <button
                   key={kind}
                   className={`kind-btn ${selectedKind === kind ? 'active' : ''}`}
-                  onClick={() => setSelectedKind(kind)}
+                  onClick={() => handleKindChange(kind)}
                 >
                   {kind}
                 </button>
@@ -3206,7 +3230,7 @@ function NapkinCreatorModal({
           </div>
 
           <div className="creator-label">
-            <span>Content (optional)</span>
+            <span>Content</span>
             <textarea
               placeholder={
                 selectedKind === 'code'
@@ -3214,9 +3238,9 @@ function NapkinCreatorModal({
                   : selectedKind === 'markdown'
                     ? '# Hello\n\nSome **markdown** content'
                     : selectedKind === 'mermaid'
-                      ? 'graph TD\n  A --> B'
+                      ? 'Edit the diagram…'
                       : selectedKind === 'svg'
-                        ? '<svg>...</svg>'
+                        ? 'Edit the SVG…'
                         : 'Paste image data URL or base64 encoded PNG'
               }
               value={content}
@@ -3230,7 +3254,7 @@ function NapkinCreatorModal({
             Cancel
           </button>
           <button className="creator-btn primary" onClick={handleCreate}>
-            Create
+            Create Napkin
           </button>
         </div>
       </div>
