@@ -19,6 +19,11 @@ config/servers.local.json
 # machine-specific state (mirrors config/servers.local.json).
 config/settings.local.json
 
+# Per-developer Pitcher (scheduled task) edits layered over the committed
+# config/pitchers.json default, so a dev checkout never commits local scheduled
+# tasks (mirrors config/servers.local.json).
+config/pitchers.local.json
+
 # Conversation history written at runtime (dev: project root, packaged: %APPDATA%).
 conversations/
 

@@ -144,6 +144,10 @@ const SETTINGS_FILE = 'config/settings.json'
 // way servers.local.json overrides servers.json.
 const SETTINGS_LOCAL_FILE = 'config/settings.local.json'
 const PITCHERS_FILE = 'config/pitchers.json'
+// Optional, gitignored per-developer override merged over PITCHERS_FILE, keyed
+// by pitcher id, so local scheduled-task edits stay out of the tracked defaults
+// (and out of `git status`), exactly like servers.local.json.
+const PITCHERS_LOCAL_FILE = 'config/pitchers.local.json'
 
 /** User-chosen state that must survive restarts (e.g. the active chat model). */
 export interface AppSettings {
@@ -277,20 +281,47 @@ export function writeServers(cwd: string, servers: McpServerConfig[]): void {
   writeFileSync(path, JSON.stringify({ ...existing, servers }, null, 2) + '\n', 'utf8')
 }
 
-/** Read every configured Pitcher (scheduled task) from disk. */
-export function readPitchers(cwd: string): Pitcher[] {
+/** Read one pitcher-config file's `pitchers` array; null when the file is absent. */
+function readPitchersFile(cwd: string, file: string): Pitcher[] | null {
   try {
-    const raw = readFileSync(resolve(cwd, PITCHERS_FILE), 'utf8')
+    const raw = readFileSync(resolve(cwd, file), 'utf8')
     const parsed = JSON.parse(raw) as { pitchers?: Pitcher[] }
     return parsed.pitchers ?? []
   } catch {
-    return []
+    return null
   }
 }
 
-/** Persist the Pitcher list, preserving any sibling keys (e.g. the note). */
+/** Layer a local override list over the base list, keyed by pitcher id: a local
+ * entry replaces the same-id base entry in place; brand-new ids are appended. */
+function mergePitchers(base: Pitcher[], local: Pitcher[]): Pitcher[] {
+  const byId = new Map(base.map((p) => [p.id, p]))
+  const order = base.map((p) => p.id)
+  for (const p of local) {
+    if (!byId.has(p.id)) order.push(p.id)
+    byId.set(p.id, p)
+  }
+  return order.map((id) => byId.get(id) as Pitcher)
+}
+
+/** Read every configured Pitcher (scheduled task), with the gitignored local
+ * override (config/pitchers.local.json) merged over the committed defaults. A
+ * developer's personal pitcher edits live only in the local file, so the tracked
+ * config/pitchers.json never picks up local churn. */
+export function readPitchers(cwd: string): Pitcher[] {
+  const base = readPitchersFile(cwd, PITCHERS_FILE) ?? []
+  const local = readPitchersFile(cwd, PITCHERS_LOCAL_FILE)
+  return local ? mergePitchers(base, local) : base
+}
+
+/** Persist the Pitcher list, preserving any sibling keys (e.g. the note). Writes
+ * to the gitignored local override when it exists, so UI edits in a dev checkout
+ * don't dirty the tracked config/pitchers.json. */
 export function writePitchers(cwd: string, pitchers: Pitcher[]): void {
-  const path = resolve(cwd, PITCHERS_FILE)
+  const target = existsSync(resolve(cwd, PITCHERS_LOCAL_FILE))
+    ? PITCHERS_LOCAL_FILE
+    : PITCHERS_FILE
+  const path = resolve(cwd, target)
   let existing: Record<string, unknown> = {}
   try {
     existing = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>
