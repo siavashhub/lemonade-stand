@@ -1,7 +1,7 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, Notification, shell } from 'electron'
 import { randomUUID } from 'node:crypto'
-import { copyFileSync, existsSync, mkdirSync, readdirSync } from 'node:fs'
-import { join } from 'node:path'
+import { copyFileSync, existsSync, mkdirSync, readdirSync, statSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type {
   AgentEvent,
@@ -437,7 +437,14 @@ ipcMain.on('agent:set-bypass', (_event, enabled: boolean) => {
 
 ipcMain.handle('explorer:open-folder', async (_event, folderPath: string) => {
   try {
-    await shell.openPath(folderPath)
+    const rawPath = String(folderPath ?? '').trim()
+    if (!rawPath) throw new Error('No folder path provided')
+
+    // Tool output can include quoted paths; trim wrapping quotes first.
+    const unquoted = rawPath.replace(/^['\"]|['\"]$/g, '')
+    const target = existsSync(unquoted) && statSync(unquoted).isFile() ? dirname(unquoted) : unquoted
+    const openError = await shell.openPath(target)
+    if (openError) throw new Error(openError)
   } catch (err) {
     console.error('[explorer] failed to open folder:', err)
     throw err

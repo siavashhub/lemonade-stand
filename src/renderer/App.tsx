@@ -1389,6 +1389,8 @@ export function App(): JSX.Element {
                 await window.api.openFolderInExplorer(path)
               } catch (err) {
                 console.error('Failed to open folder:', err)
+                const message = err instanceof Error ? err.message : String(err)
+                window.alert(`Couldn't open folder:\n${path}\n\n${message}`)
               }
             }}
             isAutoCreated={napkin?.kind === 'markdown' && napkin?.content?.includes('📂 **Saved to:**')}
