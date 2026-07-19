@@ -144,6 +144,90 @@ body {
   display: block;
 }
 
+/* Hamburger button + menu next to the app title. */
+.brand-menu-wrap {
+  position: relative;
+  flex: 0 0 auto;
+  -webkit-app-region: no-drag;
+}
+
+.hamburger-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 5px 8px;
+  cursor: pointer;
+  line-height: 1;
+}
+
+.hamburger-btn:hover {
+  border-color: var(--accent);
+}
+
+.brand-menu-popover {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  min-width: 180px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+  z-index: 60;
+}
+
+.brand-menu-label {
+  display: block;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  opacity: 0.6;
+  padding: 4px 8px;
+}
+
+.brand-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  border-radius: 6px;
+  padding: 6px 8px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.brand-menu-item:hover {
+  background: var(--bg);
+}
+
+.brand-menu-item.active {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.brand-menu-divider {
+  height: 1px;
+  margin: 6px 4px;
+  background: var(--border);
+}
+
+.brand-menu-version {
+  padding: 2px 8px 4px;
+  font-size: 11px;
+  opacity: 0.6;
+}
+
 /* The center cluster holds the primary session actions (New Session, History)
    pinned to the middle of the top bar. */
 .topbar-center {

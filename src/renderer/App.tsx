@@ -62,7 +62,7 @@ type Theme = 'light' | 'dark'
 // The overlays that can be shown one-at-a-time: top-bar/footer popovers
 // (connection, context, usage) and the full modals (pantry, models, history).
 // A single active-panel value enforces that opening one closes any other.
-type Panel = 'connection' | 'context' | 'usage' | 'pantry' | 'models' | 'history' | 'pitchers'
+type Panel = 'connection' | 'context' | 'usage' | 'pantry' | 'models' | 'history' | 'pitchers' | 'menu'
 
 // Convert base64 audio from lemond's TTS into a playable object URL. Rejects
 // (rather than swallowing) so callers can surface a playback failure instead of
@@ -948,10 +948,56 @@ export function App(): JSX.Element {
   return (
     <div className="app">
       <header className="topbar">
-        <span
-          className="brand"
-          title={version ? `Lemonade Stand ${version}` : 'Lemonade Stand'}
-        >
+        <span className="brand">
+          <div className="brand-menu-wrap">
+            <button
+              className="hamburger-btn"
+              onClick={() => togglePanel('menu')}
+              title="Menu"
+              aria-label="Open menu"
+              aria-expanded={activePanel === 'menu'}
+            >
+              <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+                <path
+                  d="M2 4 H14 M2 8 H14 M2 12 H14"
+                  stroke="currentColor"
+                  strokeWidth="1.6"
+                  strokeLinecap="round"
+                />
+              </svg>
+            </button>
+            {activePanel === 'menu' && (
+              <div className="brand-menu-popover" role="menu">
+                <span className="brand-menu-label">Theme</span>
+                <button
+                  className={`brand-menu-item ${theme === 'light' ? 'active' : ''}`}
+                  onClick={() => {
+                    setTheme('light')
+                    closePanel()
+                  }}
+                  role="menuitemradio"
+                  aria-checked={theme === 'light'}
+                >
+                  ☀️ Light
+                </button>
+                <button
+                  className={`brand-menu-item ${theme === 'dark' ? 'active' : ''}`}
+                  onClick={() => {
+                    setTheme('dark')
+                    closePanel()
+                  }}
+                  role="menuitemradio"
+                  aria-checked={theme === 'dark'}
+                >
+                  🌙 Dark
+                </button>
+                <div className="brand-menu-divider" />
+                <div className="brand-menu-version">
+                  {version ? `Lemonade Stand ${version}` : 'Lemonade Stand'}
+                </div>
+              </div>
+            )}
+          </div>
           <svg
             className="brand-logo"
             viewBox="0 0 64 64"
@@ -1005,26 +1051,6 @@ export function App(): JSX.Element {
         </div>
         <div className="topbar-right">
           <button
-            className="speak-toggle"
-            onClick={() => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))}
-            title={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
-            aria-label="Toggle color theme"
-          >
-            {theme === 'dark' ? '☀️' : '🌙'}
-          </button>
-          <button
-            className="pantry-toggle pantry-toggle-primary"
-            onClick={() => setActivePanel('pantry')}
-            title={`Open the Pantry , stock tools & skills (${tools.length} tool${
-              tools.length === 1 ? '' : 's'
-            } connected)`}
-          >
-            <ArchiveBoxIcon /> Pantry
-            <span className="tools-badge" title={`${tools.length} tool${tools.length === 1 ? '' : 's'} connected`}>
-              {tools.length}
-            </span>
-          </button>
-          <button
             className="pantry-toggle"
             onClick={() => setActivePanel('pitchers')}
             title="Open Pitchers , scheduled tasks poured fresh on a timer or when the app opens"
@@ -1038,6 +1064,18 @@ export function App(): JSX.Element {
                 {pitchers.filter((p) => p.enabled).length}
               </span>
             )}
+          </button>
+          <button
+            className="pantry-toggle pantry-toggle-primary"
+            onClick={() => setActivePanel('pantry')}
+            title={`Open the Pantry , stock tools & skills (${tools.length} tool${
+              tools.length === 1 ? '' : 's'
+            } connected)`}
+          >
+            <ArchiveBoxIcon /> Pantry
+            <span className="tools-badge" title={`${tools.length} tool${tools.length === 1 ? '' : 's'} connected`}>
+              {tools.length}
+            </span>
           </button>
           <div className="window-controls">
             <button
