@@ -7,6 +7,7 @@
   "type": "module",
   "main": "./out/main/index.js",
   "scripts": {
+    "predev": "node -e \"require('electron')\"",
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "start": "electron-vite preview",
