@@ -387,10 +387,14 @@ ipcMain.handle('agent:compact', (_event, messages: ChatMessage[]) =>
   agent.compact(messages)
 )
 
-// Reload the chat model with a new runtime context size (server /load).
-ipcMain.handle('agent:set-context', (_event, ctxSize: number) =>
-  lemonade.setContextSize(ctxSize)
-)
+// Reload the chat model with a new runtime context size (server /load). Persist
+// the chosen size so it survives restarts (dev: config/settings.local.json;
+// packaged: the per-user settings.json). Only save when the reload succeeded.
+ipcMain.handle('agent:set-context', async (_event, ctxSize: number) => {
+  const info = await lemonade.setContextSize(ctxSize)
+  if (!info.error) writeSettings(appPath, { contextSize: info.contextSize })
+  return info
+})
 
 // Models the server knows about, for the model picker.
 ipcMain.handle('agent:list-models', () => lemonade.listModels())
@@ -807,10 +811,12 @@ app.whenReady().then(async () => {
   scheduler.start()
 
   // Ensure the active model is loaded at our default context so the budget
-  // doesn't revert to the small server fallback after a restart. Best-effort
-  // and non-blocking, the window is already up.
+  // doesn't revert to the small server fallback after a restart. When the user
+  // has pinned a context size in the UI, honor that saved size instead so the
+  // server is actually running the window we budget against. Best-effort and
+  // non-blocking, the window is already up.
   void lemonade
-    .ensureModelLoaded()
+    .ensureModelLoaded(config.contextSize)
     .then(() => console.log(`[config] active chat model on server: ${lemonade.activeModel}`))
     .catch((err) => console.error('[config] ensureModelLoaded failed:', err))
 

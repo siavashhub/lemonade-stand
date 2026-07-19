@@ -89,9 +89,11 @@ export function loadConfig(cwd: string = process.cwd()): AppConfig {
     lemonadeApiKey: saved.apiKey ?? process.env.LEMONADE_API_KEY ?? '',
     model: saved.model ?? process.env.LEMONADE_MODEL ?? 'Qwen3-1.7B-GGUF',
     maxSteps: Number(process.env.AGENT_MAX_STEPS ?? '8'),
-    contextSize: process.env.LEMONADE_CONTEXT_SIZE
-      ? Number(process.env.LEMONADE_CONTEXT_SIZE)
-      : undefined,
+    // The user's last in-app choice wins and survives restarts; the env var is
+    // only the initial default before they've ever changed it in the UI.
+    contextSize:
+      saved.contextSize ??
+      (process.env.LEMONADE_CONTEXT_SIZE ? Number(process.env.LEMONADE_CONTEXT_SIZE) : undefined),
     completionReserve: Number(process.env.LEMONADE_COMPLETION_RESERVE ?? '512'),
     systemPrompt: process.env.AGENT_SYSTEM_PROMPT ?? DEFAULT_SYSTEM_PROMPT,
     requireApproval: (process.env.AGENT_REQUIRE_APPROVAL ?? 'true') !== 'false',
@@ -134,6 +136,11 @@ const SERVERS_LOCAL_FILE = 'config/servers.local.json'
 const CATALOG_FILE = 'config/catalog.json'
 const PHRASES_FILE = 'config/phrases.json'
 const SETTINGS_FILE = 'config/settings.json'
+// A developer's personal UI state (model, connection, context size, …) layers
+// over the committed settings.json from this gitignored file, so a dev checkout
+// never dirties the tracked default with machine-specific choices , exactly the
+// way servers.local.json overrides servers.json.
+const SETTINGS_LOCAL_FILE = 'config/settings.local.json'
 const PITCHERS_FILE = 'config/pitchers.json'
 
 /** User-chosen state that must survive restarts (e.g. the active chat model). */
@@ -150,21 +157,40 @@ export interface AppSettings {
   /** Diagnostic log level. Set to "debug" to mirror all logs to a file
    * (config/settings.json). Takes precedence over the LOG_LEVEL env var. */
   logLevel?: string
+  /** Runtime context window (tokens) the user last picked in the UI. Restored
+   * on the next launch so the choice survives restarts. */
+  contextSize?: number
 }
 
-/** Read persisted UI/app settings. Missing or malformed file -> empty. */
-export function readSettings(cwd: string): AppSettings {
+/** Read one settings file's JSON object; null when the file is absent/malformed. */
+function readSettingsFile(cwd: string, file: string): AppSettings | null {
   try {
-    const raw = readFileSync(resolve(cwd, SETTINGS_FILE), 'utf8')
+    const raw = readFileSync(resolve(cwd, file), 'utf8')
     return JSON.parse(raw) as AppSettings
   } catch {
-    return {}
+    return null
   }
 }
 
-/** Persist app settings, preserving any sibling keys already on disk. */
+/** Read persisted UI/app settings, with the gitignored local override
+ * (config/settings.local.json) layered over the committed defaults. A
+ * developer's personal choices live only in the local file, so the tracked
+ * config/settings.json never picks up machine-specific churn. */
+export function readSettings(cwd: string): AppSettings {
+  const base = readSettingsFile(cwd, SETTINGS_FILE) ?? {}
+  const local = readSettingsFile(cwd, SETTINGS_LOCAL_FILE)
+  return local ? { ...base, ...local } : base
+}
+
+/** Persist app settings, preserving any sibling keys already on disk. Writes to
+ * the gitignored local override when it exists (a dev checkout), so UI edits
+ * don't dirty the tracked config/settings.json; otherwise writes the base file
+ * (e.g. the seeded per-user copy in a packaged build). */
 export function writeSettings(cwd: string, settings: AppSettings): void {
-  const path = resolve(cwd, SETTINGS_FILE)
+  const target = existsSync(resolve(cwd, SETTINGS_LOCAL_FILE))
+    ? SETTINGS_LOCAL_FILE
+    : SETTINGS_FILE
+  const path = resolve(cwd, target)
   let existing: Record<string, unknown> = {}
   try {
     existing = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>
