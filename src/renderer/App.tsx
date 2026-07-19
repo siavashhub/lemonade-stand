@@ -2181,6 +2181,8 @@ function Models({
   const [error, setError] = useState<string | null>(null)
   // Quick-access filter across the catalogue.
   const [filter, setFilter] = useState<'all' | 'recommended' | 'agent'>('all')
+  // Free-text search across model id, capability labels, and Omni components.
+  const [search, setSearch] = useState('')
   // Remembers the last-seen download jobs so we can detect when one finishes
   // (transitions to complete, or disappears from the server list) and refresh
   // the model list so the just-downloaded model flips to a Load action.
@@ -2259,6 +2261,15 @@ function Models({
   const matchesFilter = (m: ModelInfo): boolean =>
     filter === 'all' ? true : filter === 'recommended' ? m.omni : m.agentReady
 
+  // Free-text match: case-insensitive substring across the model id, its
+  // capability labels, and any Omni component names. An empty query matches all.
+  const query = search.trim().toLowerCase()
+  const matchesSearch = (m: ModelInfo): boolean => {
+    if (!query) return true
+    const haystack = [m.id, ...m.labels, ...(m.components ?? [])].join(' ').toLowerCase()
+    return haystack.includes(query)
+  }
+
   // Only chat models can drive the agent; surface those first and separately.
   const llms = models.filter((m) => m.type === 'llm')
   const others = models.filter((m) => m.type !== 'llm')
@@ -2271,8 +2282,8 @@ function Models({
       if (a.agentReady !== b.agentReady) return a.agentReady ? -1 : 1
       return a.id.localeCompare(b.id)
     })
-    .filter(matchesFilter)
-  const filteredOthers = others.filter(matchesFilter)
+    .filter((m) => matchesFilter(m) && matchesSearch(m))
+  const filteredOthers = others.filter((m) => matchesFilter(m) && matchesSearch(m))
   const nothingMatches = !loading && models.length > 0 && rankedLlms.length === 0 && filteredOthers.length === 0
 
   return (
@@ -2289,6 +2300,17 @@ function Models({
             ✕
           </button>
         </header>
+
+        <div className="models-search">
+          <input
+            type="search"
+            className="models-search-input"
+            placeholder="Search models by name or capability…"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            aria-label="Search models"
+          />
+        </div>
 
         <div className="models-filters" role="group" aria-label="Filter models">
           <button
@@ -2325,8 +2347,14 @@ function Models({
           )}
           {nothingMatches && (
             <div className="pantry-empty">
-              No models match this filter.{' '}
-              <button className="link-inline" onClick={() => setFilter('all')}>
+              No models match {query ? 'your search' : 'this filter'}.{' '}
+              <button
+                className="link-inline"
+                onClick={() => {
+                  setFilter('all')
+                  setSearch('')
+                }}
+              >
                 Show all
               </button>
             </div>

@@ -1854,6 +1854,31 @@ body {
   flex-wrap: wrap;
 }
 
+/* Free-text search box above the filter chips in the Models panel. */
+.models-search {
+  padding: 10px 16px 0;
+}
+
+.models-search-input {
+  width: 100%;
+  box-sizing: border-box;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 13px;
+}
+
+.models-search-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.models-search-input::placeholder {
+  color: var(--muted);
+}
+
 .filter-chip {
   border: 1px solid var(--border);
   background: transparent;
