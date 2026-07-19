@@ -297,7 +297,14 @@ ipcMain.handle('history:clear', () => clearSessions(appPath))
 // message when the model is slow or offline so saving never blocks on this.
 ipcMain.handle('history:suggest-title', async (_event, messages: ChatMessage[]) => {
   const firstUser = messages.find((m) => m.role === 'user')
-  const fallback = (firstUser?.content ?? 'New conversation').trim().slice(0, 60)
+  const firstText =
+    typeof firstUser?.content === 'string'
+      ? firstUser.content
+      : (firstUser?.content ?? [])
+          .filter((p): p is { type: 'text'; text: string } => p.type === 'text')
+          .map((p) => p.text)
+          .join(' ')
+  const fallback = (firstText || 'New conversation').trim().slice(0, 60)
   try {
     const title = await lemonade.generateTitle(messages as never)
     return title || fallback

@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron'
+import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import type {
   AgentEvent,
   ApprovalDecision,
@@ -21,6 +21,14 @@ const api: RendererApi = {
 
   cancelMessage(): void {
     ipcRenderer.send('agent:cancel')
+  },
+
+  getPathForFile(file: File): string {
+    try {
+      return webUtils.getPathForFile(file)
+    } catch {
+      return ''
+    }
   },
 
   listTools() {

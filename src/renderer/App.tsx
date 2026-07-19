@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { JSX } from 'react'
+import type { JSX, UIEvent } from 'react'
 import type {
   AgentEvent,
   AgentTool,
@@ -10,6 +10,8 @@ import type {
   ContextInfo,
   DownloadJob,
   McpServerState,
+  MessageAttachment,
+  MessageContentPart,
   ModelInfo,
   Napkin,
   NapkinChoice,
@@ -208,11 +210,56 @@ function describeOmni(model: ModelInfo): string {
   )
 }
 
+// Read a File into a `data:` URL so an image can be previewed and, for vision
+// models, embedded inline in the outgoing message. Rejects on read failure so
+// callers can skip an unreadable attachment instead of hanging.
+function readFileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(String(reader.result))
+    reader.onerror = () => reject(reader.error ?? new Error('read failed'))
+    reader.readAsDataURL(file)
+  })
+}
+
+// Build the model-facing content for a user turn. When images are attached the
+// content becomes a multimodal array (text + image parts) so a vision model can
+// see them; otherwise it stays a plain string. Absolute paths of every attached
+// item are appended as a reference block so the agent's filesystem tools can
+// open them regardless of the model's vision support.
+function buildUserContent(
+  text: string,
+  attachments: MessageAttachment[]
+): string | MessageContentPart[] {
+  const paths = attachments.map((a) => a.path).filter((p): p is string => !!p)
+  let composed = text
+  if (paths.length > 0) {
+    const list = paths.map((p) => `- ${p}`).join('\n')
+    composed = (text ? `${text}\n\n` : '') + `Attached files (available on disk):\n${list}`
+  }
+  const images = attachments.filter((a) => a.kind === 'image' && a.dataUrl)
+  if (images.length === 0) {
+    return composed || '(see attached files)'
+  }
+  const parts: MessageContentPart[] = []
+  if (composed) parts.push({ type: 'text', text: composed })
+  for (const img of images) {
+    parts.push({ type: 'image_url', image_url: { url: img.dataUrl as string } })
+  }
+  return parts
+}
+
 export function App(): JSX.Element {
   const [entries, setEntries] = useState<Entry[]>([])
   const [history, setHistory] = useState<ChatMessage[]>([])
   const [tools, setTools] = useState<AgentTool[]>([])
   const [input, setInput] = useState('')
+  // Files/images the user attached to the next message (via paste or drag-drop).
+  // Images are previewed and shown to vision models; any item dragged from disk
+  // also carries its absolute path so the agent's filesystem tools can open it.
+  const [attachments, setAttachments] = useState<MessageAttachment[]>([])
+  // True while a drag hovers the composer, to show the drop affordance.
+  const [dragOver, setDragOver] = useState(false)
   const [busy, setBusy] = useState(false)
   const [speak, setSpeak] = useState(false)
   // True while a synthesized reply is actively playing, so the UI can offer a
@@ -305,6 +352,18 @@ export function App(): JSX.Element {
     document.documentElement.setAttribute('data-theme', theme)
     localStorage.setItem('theme', theme)
   }, [theme])
+
+  // Swallow drag-and-drop events outside the composer so a file dropped on the
+  // window edge can't make Electron navigate away from the app to open it.
+  useEffect(() => {
+    const prevent = (e: DragEvent): void => e.preventDefault()
+    window.addEventListener('dragover', prevent)
+    window.addEventListener('drop', prevent)
+    return () => {
+      window.removeEventListener('dragover', prevent)
+      window.removeEventListener('drop', prevent)
+    }
+  }, [])
 
   // Refresh the connected-tool catalogue shown in the top bar. Called on mount
   // and whenever the Pantry changes what's stocked.
@@ -429,8 +488,14 @@ export function App(): JSX.Element {
   function persistCurrent(): void {
     if (history.length === 0) return
     const firstUser = history.find((m) => m.role === 'user')
-    const title =
-      currentTitle || (firstUser?.content ?? 'New conversation').trim().slice(0, 60)
+    const firstUserText =
+      typeof firstUser?.content === 'string'
+        ? firstUser.content
+        : (firstUser?.content ?? [])
+            .filter((p): p is { type: 'text'; text: string } => p.type === 'text')
+            .map((p) => p.text)
+            .join(' ')
+    const title = currentTitle || (firstUserText || 'New conversation').trim().slice(0, 60)
     window.api
       .saveSession({
         id: sessionId,
@@ -452,6 +517,7 @@ export function App(): JSX.Element {
     persistCurrent()
     setEntries([])
     setHistory([])
+    setAttachments([])
     setCurrentTitle('')
     createdAtRef.current = Date.now()
     setSessionId(crypto.randomUUID())
@@ -482,6 +548,7 @@ export function App(): JSX.Element {
         createdAtRef.current = session.createdAt
         setEntries(session.entries)
         setHistory(session.history)
+        setAttachments([])
         setPlan(null)
         setPlanExpanded(false)
         setNapkin(null)
@@ -848,19 +915,58 @@ export function App(): JSX.Element {
     }
   }
 
+  // Turn dropped/pasted File objects into attachments. Images are read into a
+  // data URL for the thumbnail (and vision); every item keeps its on-disk path
+  // when the OS provides one so the agent can operate on it via file tools.
+  async function addFiles(files: File[]): Promise<void> {
+    const next: MessageAttachment[] = []
+    for (const file of files) {
+      const path = window.api.getPathForFile(file) || undefined
+      const isImage = file.type.startsWith('image/')
+      let dataUrl: string | undefined
+      if (isImage) {
+        try {
+          dataUrl = await readFileAsDataUrl(file)
+        } catch {
+          // Unreadable image , skip its preview but still attach by path below.
+        }
+      }
+      // Skip items we can neither read nor reference (nothing useful to send).
+      if (!path && !dataUrl) continue
+      next.push({
+        name: file.name || (isImage ? 'pasted-image.png' : 'attachment'),
+        kind: isImage ? 'image' : 'file',
+        path,
+        dataUrl,
+        mimeType: file.type || undefined,
+        size: file.size
+      })
+    }
+    if (next.length > 0) setAttachments((a) => [...a, ...next])
+  }
+
+  function removeAttachment(index: number): void {
+    setAttachments((a) => a.filter((_, i) => i !== index))
+  }
+
   async function send(): Promise<void> {
     const text = input.trim()
-    if (!text || busy) return
+    const atts = attachments
+    if ((!text && atts.length === 0) || busy) return
     setInput('')
+    setAttachments([])
     setBusy(true)
     // Clear any previous turn's plan so the sticky bar reflects only this turn.
     setPlan(null)
     setPlanExpanded(false)
 
-    const userMsg: ChatMessage = { role: 'user', content: text }
+    const userMsg: ChatMessage = { role: 'user', content: buildUserContent(text, atts) }
     const nextHistory = [...history, userMsg]
     setHistory(nextHistory)
-    setEntries((e) => [...e, { kind: 'user', text }])
+    setEntries((e) => [
+      ...e,
+      { kind: 'user', text, attachments: atts.length > 0 ? atts : undefined }
+    ])
 
     const collected: ChatMessage[] = []
     const off = window.api.onAgentEvent((event: AgentEvent) => {
@@ -1222,7 +1328,51 @@ export function App(): JSX.Element {
         />
       )}
 
-      <div className={`composer ${busy || transcribing ? 'working' : ''}`}>
+      <div
+        className={`composer ${busy || transcribing ? 'working' : ''} ${dragOver ? 'dragover' : ''}`}
+        onDragOver={(e) => {
+          if (e.dataTransfer?.types?.includes('Files')) {
+            e.preventDefault()
+            setDragOver(true)
+          }
+        }}
+        onDragLeave={(e) => {
+          // Ignore leaves bubbling up from child elements; only clear when the
+          // pointer actually leaves the composer.
+          if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragOver(false)
+        }}
+        onDrop={(e) => {
+          e.preventDefault()
+          setDragOver(false)
+          const files = Array.from(e.dataTransfer?.files ?? [])
+          if (files.length > 0) void addFiles(files)
+        }}
+      >
+        {attachments.length > 0 && (
+          <div className="attachments">
+            {attachments.map((att, i) => (
+              <div key={i} className={`attachment ${att.kind}`} title={att.path ?? att.name}>
+                {att.kind === 'image' && att.dataUrl ? (
+                  <img className="attachment-thumb" src={att.dataUrl} alt={att.name} />
+                ) : (
+                  <span className="attachment-icon" aria-hidden="true">
+                    📎
+                  </span>
+                )}
+                <span className="attachment-name">{att.name}</span>
+                <button
+                  className="attachment-remove"
+                  onClick={() => removeAttachment(i)}
+                  aria-label={`Remove ${att.name}`}
+                  title="Remove"
+                >
+                  ×
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+        <div className="composer-row">
         <textarea
           ref={inputRef}
           value={input}
@@ -1234,6 +1384,16 @@ export function App(): JSX.Element {
                 : 'What do you need help with?'
           }
           onChange={(e) => setInput(e.target.value)}
+          onPaste={(e) => {
+            const files = Array.from(e.clipboardData?.items ?? [])
+              .filter((it) => it.kind === 'file')
+              .map((it) => it.getAsFile())
+              .filter((f): f is File => !!f)
+            if (files.length > 0) {
+              e.preventDefault()
+              void addFiles(files)
+            }
+          }}
           onKeyDown={(e) => {
             if (e.key === 'Enter' && !e.shiftKey) {
               e.preventDefault()
@@ -1270,13 +1430,14 @@ export function App(): JSX.Element {
           <button
             className="send-btn"
             onClick={() => void send()}
-            disabled={!input.trim()}
+            disabled={!input.trim() && attachments.length === 0}
             aria-label="Send"
             title="Send"
           >
             <span className="send-lemon">🍋</span>
           </button>
         )}
+        </div>
       </div>
 
       <footer className="statusbar">
@@ -2708,12 +2869,28 @@ function ReasoningLine({
 }): JSX.Element {
   const streaming = entry.streaming ?? false
   const [open, setOpen] = useState(streaming)
+  const bodyRef = useRef<HTMLDivElement>(null)
+  // Stick to the bottom as the thought streams , but back off the moment the
+  // user scrolls up to read, and re-engage once they scroll back down.
+  const stickRef = useRef(true)
 
   // Collapse automatically the moment streaming finishes; expand when a fresh
   // thought starts streaming.
   useEffect(() => {
     setOpen(streaming)
   }, [streaming])
+
+  // Follow the latest lines as text streams in, unless the user has scrolled up.
+  useEffect(() => {
+    const body = bodyRef.current
+    if (open && body && stickRef.current) body.scrollTop = body.scrollHeight
+  }, [entry.text, open])
+
+  function onBodyScroll(e: UIEvent<HTMLDivElement>): void {
+    const el = e.currentTarget
+    // Within a few px of the bottom counts as "following".
+    stickRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 8
+  }
 
   return (
     <details
@@ -2727,7 +2904,9 @@ function ReasoningLine({
           {streaming ? 'Thinking…' : reasoningSummary(entry.text)}
         </span>
       </summary>
-      <div className="reasoning-body">{entry.text}</div>
+      <div className="reasoning-body" ref={bodyRef} onScroll={onBodyScroll}>
+        {entry.text}
+      </div>
     </details>
   )
 }
@@ -2795,10 +2974,29 @@ function Line({
   if (entry.kind === 'reasoning') {
     return <ReasoningLine entry={entry} />
   }
+  const attachments = entry.kind === 'user' ? entry.attachments : undefined
   return (
     <div className={`line ${entry.kind}`}>
       <span className="role">{entry.kind === 'user' ? 'You' : 'Agent'}</span>
-      <span className="bubble">{entry.text}</span>
+      <span className="bubble">
+        {attachments && attachments.length > 0 && (
+          <span className="bubble-attachments">
+            {attachments.map((att, i) => (
+              <span key={i} className={`attachment ${att.kind}`} title={att.path ?? att.name}>
+                {att.kind === 'image' && att.dataUrl ? (
+                  <img className="attachment-thumb" src={att.dataUrl} alt={att.name} />
+                ) : (
+                  <span className="attachment-icon" aria-hidden="true">
+                    📎
+                  </span>
+                )}
+                <span className="attachment-name">{att.name}</span>
+              </span>
+            ))}
+          </span>
+        )}
+        {entry.text}
+      </span>
     </div>
   )
 }

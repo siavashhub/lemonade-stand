@@ -1379,8 +1379,8 @@ body {
 
 .composer {
   display: flex;
+  flex-direction: column;
   gap: 8px;
-  align-items: center;
   padding: 12px;
   margin: 0 12px 16px;
   border: 1px solid var(--border);
@@ -1388,6 +1388,85 @@ body {
   background: var(--panel);
   box-shadow: 0 6px 24px -12px rgba(0, 0, 0, 0.45);
   overflow: hidden;
+}
+
+/* The input row: textarea plus mic/send buttons, side by side. */
+.composer-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+/* Highlight the composer while a file is dragged over it, signalling it as a
+   valid drop target. */
+.composer.dragover {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent) inset, 0 6px 24px -12px rgba(0, 0, 0, 0.45);
+}
+
+/* Chips for the files/images queued to send with the next message. */
+.composer .attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.attachment {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 220px;
+  padding: 4px 6px 4px 4px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg);
+  font-size: 12px;
+}
+
+.attachment-thumb {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  object-fit: cover;
+  flex-shrink: 0;
+}
+
+.attachment-icon {
+  font-size: 14px;
+  padding-left: 2px;
+}
+
+.attachment-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attachment-remove {
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--muted, var(--text));
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.attachment-remove:hover {
+  background: var(--border);
+  color: var(--text);
+}
+
+/* Attachment chips echoed inside a sent user message bubble. */
+.bubble-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 6px;
 }
 
 /* While the agent is working (or audio is transcribing) a thin accent beam
