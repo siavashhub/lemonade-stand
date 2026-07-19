@@ -88,7 +88,9 @@ export function loadConfig(cwd: string = process.cwd()): AppConfig {
       saved.baseUrl ?? process.env.LEMONADE_BASE_URL ?? 'http://localhost:13305/api/v1',
     lemonadeApiKey: saved.apiKey ?? process.env.LEMONADE_API_KEY ?? '',
     model: saved.model ?? process.env.LEMONADE_MODEL ?? 'Qwen3-1.7B-GGUF',
-    maxSteps: Number(process.env.AGENT_MAX_STEPS ?? '8'),
+    // A value saved in settings.json wins so packaged users can tune it without
+    // touching env; the env var is only the initial default before that.
+    maxSteps: saved.maxSteps ?? Number(process.env.AGENT_MAX_STEPS ?? '20'),
     // The user's last in-app choice wins and survives restarts; the env var is
     // only the initial default before they've ever changed it in the UI.
     contextSize:
@@ -160,6 +162,9 @@ export interface AppSettings {
   /** Runtime context window (tokens) the user last picked in the UI. Restored
    * on the next launch so the choice survives restarts. */
   contextSize?: number
+  /** Max tool-calling iterations per user turn before the loop stops. Lets a
+   * packaged user tune the safety rail from settings.json without env vars. */
+  maxSteps?: number
 }
 
 /** Read one settings file's JSON object; null when the file is absent/malformed. */

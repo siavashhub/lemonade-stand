@@ -1,3 +1,4 @@
 {
-  "contextSize": 8192
+  "contextSize": 8192,
+  "maxSteps": 20
 }
