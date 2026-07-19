@@ -222,21 +222,66 @@ function readFileAsDataUrl(file: File): Promise<string> {
   })
 }
 
+// Normalize a filesystem path for prefix comparison: unify separators, strip a
+// trailing separator, and lowercase (this app ships on Windows, whose paths are
+// case-insensitive). Two normalized paths can then be compared as plain strings.
+function normalizeFsPath(p: string): string {
+  return p
+    .replace(/[\\/]+/g, '\\')
+    .replace(/\\+$/, '')
+    .toLowerCase()
+}
+
+// Whether `filePath` lives inside one of the agent's accessible filesystem roots.
+// Used to decide whether to tell the model a dropped file is openable (inside a
+// root) or unreachable (outside every root), so it doesn't confidently reach for
+// a filesystem tool that the sandboxed server will just deny.
+function isPathReachable(filePath: string, roots: string[]): boolean {
+  if (roots.length === 0) return false
+  const f = normalizeFsPath(filePath)
+  return roots.some((root) => {
+    const r = normalizeFsPath(root)
+    return f === r || f.startsWith(r + '\\')
+  })
+}
+
 // Build the model-facing content for a user turn. When images are attached the
 // content becomes a multimodal array (text + image parts) so a vision model can
-// see them; otherwise it stays a plain string. Absolute paths of every attached
-// item are appended as a reference block so the agent's filesystem tools can
-// open them regardless of the model's vision support.
+// see them; otherwise it stays a plain string. Paths are split by whether the
+// agent's filesystem tools can actually reach them: in-root files are listed as
+// available on disk, while out-of-root files are called out explicitly so the
+// model explains the boundary instead of trying (and failing) to open them.
 function buildUserContent(
   text: string,
-  attachments: MessageAttachment[]
+  attachments: MessageAttachment[],
+  fsRoots: string[]
 ): string | MessageContentPart[] {
-  const paths = attachments.map((a) => a.path).filter((p): p is string => !!p)
-  let composed = text
-  if (paths.length > 0) {
-    const list = paths.map((p) => `- ${p}`).join('\n')
-    composed = (text ? `${text}\n\n` : '') + `Attached files (available on disk):\n${list}`
+  const withPath = attachments.filter(
+    (a): a is MessageAttachment & { path: string } => !!a.path
+  )
+  const reachable = withPath.filter((a) => isPathReachable(a.path, fsRoots))
+  // Images still travel inline (below), so a picture the agent can't open on
+  // disk isn't truly inaccessible , only non-image files are worth flagging.
+  const unreachable = withPath.filter(
+    (a) => !isPathReachable(a.path, fsRoots) && !(a.kind === 'image' && a.dataUrl)
+  )
+
+  const blocks: string[] = []
+  if (reachable.length > 0) {
+    const list = reachable.map((a) => `- ${a.path}`).join('\n')
+    blocks.push(`Attached files (available on disk):\n${list}`)
   }
+  if (unreachable.length > 0) {
+    const list = unreachable.map((a) => `- ${a.name} (${a.path})`).join('\n')
+    blocks.push(
+      'These attached files are OUTSIDE the folders your filesystem tools can access, so you ' +
+        'cannot open them. Do not attempt to read them. Tell the user to move the file into an ' +
+        `allowed folder, or to grant access to its location from the Pantry:\n${list}`
+    )
+  }
+  let composed = text
+  if (blocks.length > 0) composed = (text ? `${text}\n\n` : '') + blocks.join('\n\n')
+
   const images = attachments.filter((a) => a.kind === 'image' && a.dataUrl)
   if (images.length === 0) {
     return composed || '(see attached files)'
@@ -258,6 +303,11 @@ export function App(): JSX.Element {
   // Images are previewed and shown to vision models; any item dragged from disk
   // also carries its absolute path so the agent's filesystem tools can open it.
   const [attachments, setAttachments] = useState<MessageAttachment[]>([])
+  // The folders the agent's filesystem tools can actually read/write, derived
+  // from enabled Filesystem MCP servers. Lets the composer tell the model (and
+  // the user) when a dropped file lives outside that boundary instead of letting
+  // it try a filesystem tool that would be denied.
+  const [fsRoots, setFsRoots] = useState<string[]>([])
   // True while a drag hovers the composer, to show the drop affordance.
   const [dragOver, setDragOver] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -369,6 +419,22 @@ export function App(): JSX.Element {
   // and whenever the Pantry changes what's stocked.
   function refreshTools(): void {
     window.api.listTools().then(setTools).catch(() => setTools([]))
+  }
+
+  // Re-derive which folders the agent's filesystem tools can reach, from the
+  // enabled Filesystem MCP server(s). Refreshed alongside tools so the composer
+  // always knows the current file-access boundary.
+  function refreshFsRoots(): void {
+    window.api
+      .listServers()
+      .then((servers) =>
+        setFsRoots(
+          servers
+            .filter((s) => s.enabled && s.id === 'filesystem' && !!s.path)
+            .map((s) => s.path as string)
+        )
+      )
+      .catch(() => setFsRoots([]))
   }
 
   // Re-read the active model's context budget for the top-bar badge.
@@ -593,6 +659,7 @@ export function App(): JSX.Element {
 
   useEffect(() => {
     refreshTools()
+    refreshFsRoots()
     window.api.getSpeak().then(setSpeak).catch(() => setSpeak(false))
     refreshContext()
     refreshSessions()
@@ -960,7 +1027,7 @@ export function App(): JSX.Element {
     setPlan(null)
     setPlanExpanded(false)
 
-    const userMsg: ChatMessage = { role: 'user', content: buildUserContent(text, atts) }
+    const userMsg: ChatMessage = { role: 'user', content: buildUserContent(text, atts, fsRoots) }
     const nextHistory = [...history, userMsg]
     setHistory(nextHistory)
     setEntries((e) => [
@@ -1596,7 +1663,13 @@ export function App(): JSX.Element {
       </div>
 
       {activePanel === 'pantry' && (
-        <Pantry onClose={closePanel} onChanged={refreshTools} />
+        <Pantry
+          onClose={closePanel}
+          onChanged={() => {
+            refreshTools()
+            refreshFsRoots()
+          }}
+        />
       )}
       {activePanel === 'history' && (
         <History
