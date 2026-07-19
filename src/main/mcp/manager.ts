@@ -52,19 +52,22 @@ function bundledBinDirs(): string[] {
   return cachedBinDirs
 }
 
-// Windows env var names are case-insensitive; find the real PATH key or default.
-function pathKey(env: Record<string, string>): string {
-  if (process.platform === 'win32') {
-    return Object.keys(env).find((k) => k.toLowerCase() === 'path') ?? 'Path'
-  }
-  return 'PATH'
-}
-
 function withBundledPath(env: Record<string, string>): Record<string, string> {
+  // Collapse every case-variant of PATH (Windows exposes `Path`) into a single
+  // canonical uppercase `PATH`. The MCP SDK's getDefaultEnvironment() injects an
+  // uppercase `PATH` (with the un-augmented value) and merges it BEFORE our env;
+  // if we left a differently-cased `Path` key around, the spawned process would
+  // carry BOTH keys and cross-spawn could resolve the launcher against the stale
+  // one — producing `spawn uvx ENOENT` even though our bin dir was on `Path`.
+  let current = ''
+  for (const k of Object.keys(env)) {
+    if (k.toLowerCase() === 'path') {
+      if (!current) current = env[k]
+      delete env[k]
+    }
+  }
   const dirs = bundledBinDirs()
-  if (dirs.length === 0) return env
-  const key = pathKey(env)
-  env[key] = [...dirs, env[key] ?? ''].filter(Boolean).join(delimiter)
+  env.PATH = [...dirs, current].filter(Boolean).join(delimiter)
   return env
 }
 
