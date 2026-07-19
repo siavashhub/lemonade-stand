@@ -552,8 +552,16 @@ ipcMain.handle('agent:send', async (event, messages: ChatMessage[]) => {
   }
 })
 
-// Renderer's stop button: halt the running agent turn.
-ipcMain.on('agent:cancel', () => currentAgentAbort?.abort())
+// Renderer's stop button: halt the running agent turn. Aborting only flips the
+// signal, which the loop checks between steps , but if the turn is parked on a
+// pending approval prompt it would never reach that check. So also drain any
+// in-flight approvals, resolving each as a denial, to unblock the awaited
+// `approve(...)` call so the loop can observe the abort and stop.
+ipcMain.on('agent:cancel', () => {
+  currentAgentAbort?.abort()
+  for (const resolve of pendingApprovals.values()) resolve('deny')
+  pendingApprovals.clear()
+})
 
 // --- Lifecycle ---------------------------------------------------------------
 
