@@ -949,6 +949,37 @@ export function App(): JSX.Element {
     <div className="app">
       <header className="topbar">
         <span className="brand">
+          <svg
+            className="brand-logo"
+            viewBox="0 0 64 64"
+            xmlns="http://www.w3.org/2000/svg"
+            role="img"
+            aria-label="Lemonade Stand logo"
+          >
+            <rect x="4" y="4" width="56" height="56" rx="14" fill="#f5c542" />
+            <path d="M4 18 H60 V24 H4 Z" fill="#e05a5a" />
+            <path
+              d="M12 18 V24 M24 18 V24 M36 18 V24 M48 18 V24"
+              stroke="#ffffff"
+              strokeWidth="4"
+            />
+            <path
+              d="M20 31 V50 H31"
+              fill="none"
+              stroke="#1a1a1e"
+              strokeWidth="5"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+            <path
+              d="M46 35 C46 31 36 31 36 36 C36 40 46 40 46 45 C46 50 36 50 36 46"
+              fill="none"
+              stroke="#1a1a1e"
+              strokeWidth="5"
+              strokeLinecap="round"
+            />
+          </svg>
+          Lemonade Stand
           <div className="brand-menu-wrap">
             <button
               className="hamburger-btn"
@@ -998,37 +1029,6 @@ export function App(): JSX.Element {
               </div>
             )}
           </div>
-          <svg
-            className="brand-logo"
-            viewBox="0 0 64 64"
-            xmlns="http://www.w3.org/2000/svg"
-            role="img"
-            aria-label="Lemonade Stand logo"
-          >
-            <rect x="4" y="4" width="56" height="56" rx="14" fill="#f5c542" />
-            <path d="M4 18 H60 V24 H4 Z" fill="#e05a5a" />
-            <path
-              d="M12 18 V24 M24 18 V24 M36 18 V24 M48 18 V24"
-              stroke="#ffffff"
-              strokeWidth="4"
-            />
-            <path
-              d="M20 31 V50 H31"
-              fill="none"
-              stroke="#1a1a1e"
-              strokeWidth="5"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-            <path
-              d="M46 35 C46 31 36 31 36 36 C36 40 46 40 46 45 C46 50 36 50 36 46"
-              fill="none"
-              stroke="#1a1a1e"
-              strokeWidth="5"
-              strokeLinecap="round"
-            />
-          </svg>
-          Lemonade Stand
         </span>
         <div className="topbar-center">
           <div className="session-seg">
