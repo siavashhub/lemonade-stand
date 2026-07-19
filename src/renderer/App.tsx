@@ -13,6 +13,8 @@ import type {
   ModelInfo,
   Napkin,
   NapkinChoice,
+  Pitcher,
+  PitcherEvent,
   PlanStep,
   SessionSummary,
   TranscriptEntry
@@ -23,6 +25,7 @@ import {
   ClockIcon,
   CpuChipIcon,
   MicrophoneIcon,
+  PitcherIcon,
   ShieldCheckIcon,
   ShieldSlashIcon,
   SpeakerWaveIcon,
@@ -58,7 +61,7 @@ type Theme = 'light' | 'dark'
 // The overlays that can be shown one-at-a-time: top-bar/footer popovers
 // (connection, context, usage) and the full modals (pantry, models, history).
 // A single active-panel value enforces that opening one closes any other.
-type Panel = 'connection' | 'context' | 'usage' | 'pantry' | 'models' | 'history'
+type Panel = 'connection' | 'context' | 'usage' | 'pantry' | 'models' | 'history' | 'pitchers'
 
 // Convert base64 audio from lemond's TTS into a playable object URL. Rejects
 // (rather than swallowing) so callers can surface a playback failure instead of
@@ -271,6 +274,7 @@ export function App(): JSX.Element {
   // edited; `sessions` backs the history sidebar. `currentTitle` is the
   // auto-generated title once the first exchange has happened.
   const [sessions, setSessions] = useState<SessionSummary[]>([])
+  const [pitchers, setPitchers] = useState<Pitcher[]>([])
   const [sessionId, setSessionId] = useState<string>(() => crypto.randomUUID())
   const [currentTitle, setCurrentTitle] = useState('')
   const createdAtRef = useRef<number>(Date.now())
@@ -411,6 +415,11 @@ export function App(): JSX.Element {
     window.api.listSessions().then(setSessions).catch(() => setSessions([]))
   }
 
+  // Reload the configured Pitchers (scheduled tasks) backing the Pitchers panel.
+  function refreshPitchers(): void {
+    window.api.listPitchers().then(setPitchers).catch(() => setPitchers([]))
+  }
+
   // Persist the live conversation (model history + visual transcript) under the
   // current session id. Called by the autosave effect once a turn settles.
   function persistCurrent(): void {
@@ -516,11 +525,21 @@ export function App(): JSX.Element {
     window.api.getSpeak().then(setSpeak).catch(() => setSpeak(false))
     refreshContext()
     refreshSessions()
+    refreshPitchers()
     window.api.getAppVersion().then(setVersion).catch(() => setVersion(''))
     window.api
       .getThinkingPhrases()
       .then(setThinkingPhrases)
       .catch(() => setThinkingPhrases([]))
+  }, [])
+
+  // Keep the Pitchers list fresh as scheduled/manual pours change their status,
+  // and refresh the history list when a pour saves a new conversation.
+  useEffect(() => {
+    return window.api.onPitcherEvent((evt: PitcherEvent) => {
+      refreshPitchers()
+      if (evt.type === 'pitcher_finished' && evt.ok) refreshSessions()
+    })
   }, [])
 
   // Autosave the live conversation whenever a turn settles (busy clears) or the
@@ -1002,6 +1021,21 @@ export function App(): JSX.Element {
               {tools.length}
             </span>
           </button>
+          <button
+            className="pantry-toggle"
+            onClick={() => setActivePanel('pitchers')}
+            title="Open Pitchers , scheduled tasks poured fresh on a timer or when the app opens"
+          >
+            <PitcherIcon /> Pitchers
+            {pitchers.filter((p) => p.enabled).length > 0 && (
+              <span
+                className="tools-badge"
+                title={`${pitchers.filter((p) => p.enabled).length} active Pitcher(s)`}
+              >
+                {pitchers.filter((p) => p.enabled).length}
+              </span>
+            )}
+          </button>
           <div className="window-controls">
             <button
               className="win-btn"
@@ -1310,6 +1344,15 @@ export function App(): JSX.Element {
           onOpen={openSession}
           onDelete={removeSession}
           onClear={clearHistory}
+          onClose={closePanel}
+        />
+      )}
+      {activePanel === 'pitchers' && (
+        <Pitchers
+          pitchers={pitchers}
+          tools={tools}
+          onChanged={setPitchers}
+          onOpenSession={openSession}
           onClose={closePanel}
         />
       )}
@@ -1735,6 +1778,284 @@ function History({
           ))}
         </div>
       </aside>
+    </div>
+  )
+}
+
+// The Pitchers slide-over: manage scheduled tasks ("Pitchers") that pour fresh
+// results on a timer or when the app opens. Each Pitcher is a saved prompt plus
+// a trigger, an output target, and a whitelist of tools it may auto-run.
+function Pitchers({
+  pitchers,
+  tools,
+  onChanged,
+  onOpenSession,
+  onClose
+}: {
+  pitchers: Pitcher[]
+  tools: AgentTool[]
+  onChanged: (list: Pitcher[]) => void
+  onOpenSession: (id: string) => void
+  onClose: () => void
+}): JSX.Element {
+  const [editing, setEditing] = useState<Pitcher | null>(null)
+  const [pouringId, setPouringId] = useState<string | null>(null)
+
+  const blank = (): Pitcher => ({
+    id: crypto.randomUUID(),
+    name: 'Morning brief',
+    enabled: true,
+    prompt: 'Fetch a website and summarize the key points in a few bullets.',
+    trigger: { type: 'daily', at: '08:00' },
+    output: 'napkin',
+    allowedTools: []
+  })
+
+  const save = async (p: Pitcher): Promise<void> => {
+    onChanged(await window.api.savePitcher(p))
+    setEditing(null)
+  }
+  const remove = async (id: string): Promise<void> => {
+    onChanged(await window.api.deletePitcher(id))
+  }
+  const toggle = async (p: Pitcher): Promise<void> => {
+    onChanged(await window.api.savePitcher({ ...p, enabled: !p.enabled }))
+  }
+  const pour = async (id: string): Promise<void> => {
+    setPouringId(id)
+    try {
+      const r = await window.api.runPitcher(id)
+      onChanged(await window.api.listPitchers())
+      if (r.ok && r.sessionId) onOpenSession(r.sessionId)
+    } finally {
+      setPouringId(null)
+    }
+  }
+
+  const describeTrigger = (p: Pitcher): string =>
+    p.trigger.type === 'on-open' ? 'When the app opens' : `Daily at ${p.trigger.at}`
+
+  return (
+    <div className="pantry-overlay history-overlay" onClick={onClose}>
+      <aside className="pantry history-panel" onClick={(e) => e.stopPropagation()}>
+        <header className="pantry-head">
+          <div>
+            <h2>
+              <PitcherIcon /> Pitchers
+            </h2>
+            <p className="pantry-sub">
+              Scheduled tasks, poured fresh on a timer or when the app opens
+            </p>
+          </div>
+          <button className="pantry-close" onClick={onClose} aria-label="Close" title="Close">
+            ✕
+          </button>
+        </header>
+
+        {editing ? (
+          <PitcherEditor
+            key={editing.id}
+            initial={editing}
+            tools={tools}
+            onCancel={() => setEditing(null)}
+            onSave={save}
+          />
+        ) : (
+          <>
+            <div className="history-search">
+              <button className="pantry-add" onClick={() => setEditing(blank())}>
+                ＋ New Pitcher
+              </button>
+            </div>
+            <div className="history-list">
+              {pitchers.length === 0 && (
+                <div className="empty">
+                  No Pitchers yet. Create one to have the agent pour a fresh result on a
+                  schedule.
+                </div>
+              )}
+              {pitchers.map((p) => (
+                <div key={p.id} className={`history-item ${p.enabled ? '' : 'disabled'}`}>
+                  <button
+                    className="history-open"
+                    onClick={() => setEditing(p)}
+                    title="Edit this Pitcher"
+                  >
+                    <span className="history-title">
+                      {p.enabled ? '🥤' : '⏸'} {p.name}
+                    </span>
+                    <span className="history-meta">
+                      {describeTrigger(p)} · serves {p.output}
+                      {p.lastStatus === 'error' && ' · ⚠ last run failed'}
+                      {p.lastStatus === 'ok' && p.lastRunAt
+                        ? ` · last ${new Date(p.lastRunAt).toLocaleString()}`
+                        : ''}
+                    </span>
+                  </button>
+                  <button
+                    className="history-del"
+                    onClick={() => pour(p.id)}
+                    disabled={pouringId !== null}
+                    aria-label="Pour now"
+                    title="Pour now"
+                  >
+                    {pouringId === p.id ? '…' : '▶'}
+                  </button>
+                  <button
+                    className="history-del"
+                    onClick={() => toggle(p)}
+                    aria-label={p.enabled ? 'Disable' : 'Enable'}
+                    title={p.enabled ? 'Disable' : 'Enable'}
+                  >
+                    {p.enabled ? '⏸' : '⏵'}
+                  </button>
+                  <button
+                    className="history-del"
+                    onClick={() => remove(p.id)}
+                    aria-label="Delete Pitcher"
+                    title="Delete Pitcher"
+                  >
+                    <TrashIcon />
+                  </button>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+      </aside>
+    </div>
+  )
+}
+
+// The create/edit form for a single Pitcher. The tool whitelist is the security
+// crux: only the tools checked here are auto-approved when the Pitcher pours
+// unattended, so a scheduled task can never run a tool it wasn't granted.
+function PitcherEditor({
+  initial,
+  tools,
+  onCancel,
+  onSave
+}: {
+  initial: Pitcher
+  tools: AgentTool[]
+  onCancel: () => void
+  onSave: (p: Pitcher) => void
+}): JSX.Element {
+  const [draft, setDraft] = useState<Pitcher>(initial)
+
+  const set = (patch: Partial<Pitcher>): void => setDraft((d) => ({ ...d, ...patch }))
+
+  const toggleTool = (qualified: string): void =>
+    setDraft((d) => ({
+      ...d,
+      allowedTools: d.allowedTools.includes(qualified)
+        ? d.allowedTools.filter((t) => t !== qualified)
+        : [...d.allowedTools, qualified]
+    }))
+
+  const canSave = draft.name.trim().length > 0 && draft.prompt.trim().length > 0
+
+  return (
+    <div className="pitcher-editor">
+      <label className="pitcher-field">
+        <span>Name</span>
+        <input
+          type="text"
+          value={draft.name}
+          onChange={(e) => set({ name: e.target.value })}
+          placeholder="Morning brief"
+        />
+      </label>
+
+      <label className="pitcher-field">
+        <span>Prompt</span>
+        <textarea
+          rows={4}
+          value={draft.prompt}
+          onChange={(e) => set({ prompt: e.target.value })}
+          placeholder="Fetch https://example.com and summarize it in 5 bullets."
+        />
+      </label>
+
+      <label className="pitcher-field">
+        <span>Trigger</span>
+        <div className="pitcher-row">
+          <select
+            value={draft.trigger.type}
+            onChange={(e) =>
+              set({
+                trigger:
+                  e.target.value === 'on-open'
+                    ? { type: 'on-open' }
+                    : { type: 'daily', at: '08:00' }
+              })
+            }
+          >
+            <option value="daily">Daily at</option>
+            <option value="on-open">When the app opens</option>
+          </select>
+          {draft.trigger.type === 'daily' && (
+            <input
+              type="time"
+              value={draft.trigger.at}
+              onChange={(e) => set({ trigger: { type: 'daily', at: e.target.value } })}
+            />
+          )}
+        </div>
+      </label>
+
+      <label className="pitcher-field">
+        <span>Serve to</span>
+        <select
+          value={draft.output}
+          onChange={(e) => set({ output: e.target.value as Pitcher['output'] })}
+        >
+          <option value="napkin">Napkin (rich artifact)</option>
+          <option value="chat">Chat (saved conversation)</option>
+        </select>
+      </label>
+
+      <div className="pitcher-field">
+        <span>
+          Allowed tools{' '}
+          <em className="pitcher-hint">
+            (auto-approved during a pour, everything else is blocked)
+          </em>
+        </span>
+        <div className="pitcher-tools">
+          {tools.length === 0 && (
+            <div className="empty">
+              No tools connected. Stock some in the Pantry so Pitchers can fetch, read, or
+              write.
+            </div>
+          )}
+          {tools.map((t) => (
+            <label key={t.qualifiedName} className="pitcher-tool">
+              <input
+                type="checkbox"
+                checked={draft.allowedTools.includes(t.qualifiedName)}
+                onChange={() => toggleTool(t.qualifiedName)}
+              />
+              <span className="pitcher-tool-name">
+                {t.serverId} · {t.toolName}
+              </span>
+            </label>
+          ))}
+        </div>
+      </div>
+
+      <div className="pitcher-actions">
+        <button className="history-confirm-no" onClick={onCancel}>
+          Cancel
+        </button>
+        <button
+          className="pantry-add"
+          disabled={!canSave}
+          onClick={() => onSave({ ...draft, name: draft.name.trim(), prompt: draft.prompt.trim() })}
+        >
+          Save Pitcher
+        </button>
+      </div>
     </div>
   )
 }

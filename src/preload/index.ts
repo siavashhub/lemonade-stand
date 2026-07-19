@@ -3,6 +3,7 @@ import type {
   AgentEvent,
   ApprovalDecision,
   ChatMessage,
+  PitcherEvent,
   RendererApi
 } from '@shared/types'
 
@@ -170,6 +171,28 @@ const api: RendererApi = {
 
   suggestTitle(history: ChatMessage[]) {
     return ipcRenderer.invoke('history:suggest-title', history)
+  },
+
+  listPitchers() {
+    return ipcRenderer.invoke('pitcher:list')
+  },
+
+  savePitcher(pitcher) {
+    return ipcRenderer.invoke('pitcher:save', pitcher)
+  },
+
+  deletePitcher(id: string) {
+    return ipcRenderer.invoke('pitcher:delete', id)
+  },
+
+  runPitcher(id: string) {
+    return ipcRenderer.invoke('pitcher:run', id)
+  },
+
+  onPitcherEvent(handler: (event: PitcherEvent) => void): () => void {
+    const listener = (_event: unknown, payload: PitcherEvent): void => handler(payload)
+    ipcRenderer.on('pitcher:event', listener)
+    return () => ipcRenderer.removeListener('pitcher:event', listener)
   },
 
   minimizeWindow(): void {

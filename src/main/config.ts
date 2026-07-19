@@ -1,6 +1,6 @@
 import { readFileSync, writeFileSync } from 'node:fs'
 import { resolve } from 'node:path'
-import type { CatalogEntry, McpServerConfig } from '@shared/types'
+import type { CatalogEntry, McpServerConfig, Pitcher } from '@shared/types'
 
 // Minimal .env loader, avoids a dependency. Parses KEY=VALUE lines, ignores
 // comments/blank lines, and does not override variables already in the real
@@ -135,6 +135,7 @@ const SERVERS_FILE = 'config/servers.json'
 const CATALOG_FILE = 'config/catalog.json'
 const PHRASES_FILE = 'config/phrases.json'
 const SETTINGS_FILE = 'config/settings.json'
+const PITCHERS_FILE = 'config/pitchers.json'
 
 /** User-chosen state that must survive restarts (e.g. the active chat model). */
 export interface AppSettings {
@@ -214,6 +215,29 @@ export function writeServers(cwd: string, servers: McpServerConfig[]): void {
     // Fresh file is fine.
   }
   writeFileSync(path, JSON.stringify({ ...existing, servers }, null, 2) + '\n', 'utf8')
+}
+
+/** Read every configured Pitcher (scheduled task) from disk. */
+export function readPitchers(cwd: string): Pitcher[] {
+  try {
+    const raw = readFileSync(resolve(cwd, PITCHERS_FILE), 'utf8')
+    const parsed = JSON.parse(raw) as { pitchers?: Pitcher[] }
+    return parsed.pitchers ?? []
+  } catch {
+    return []
+  }
+}
+
+/** Persist the Pitcher list, preserving any sibling keys (e.g. the note). */
+export function writePitchers(cwd: string, pitchers: Pitcher[]): void {
+  const path = resolve(cwd, PITCHERS_FILE)
+  let existing: Record<string, unknown> = {}
+  try {
+    existing = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>
+  } catch {
+    // Fresh file is fine.
+  }
+  writeFileSync(path, JSON.stringify({ ...existing, pitchers }, null, 2) + '\n', 'utf8')
 }
 
 /** The Market catalogue of installable tools/skills. */

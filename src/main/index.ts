@@ -1,23 +1,37 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, Notification } from 'electron'
 import { randomUUID } from 'node:crypto'
 import { copyFileSync, existsSync, mkdirSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import type { AgentEvent, ApprovalDecision, ChatMessage, McpServerState, StoredSession } from '@shared/types'
+import type {
+  AgentEvent,
+  ApprovalDecision,
+  ChatMessage,
+  McpServerState,
+  Napkin,
+  Pitcher,
+  PitcherEvent,
+  PitcherRunResult,
+  StoredSession,
+  TranscriptEntry
+} from '@shared/types'
 import {
   loadCatalog,
   loadConfig,
   loadThinkingPhrases,
   pathForServer,
+  readPitchers,
   readServers,
   serverFromCatalog,
   withServerPath,
+  writePitchers,
   writeServers,
   writeSettings
 } from './config'
 import { LemonadeClient } from './lemonade/client'
 import { McpManager } from './mcp/manager'
 import { Agent, type ApproveFn, type AskNapkinFn, type ContinueFn } from './agent/loop'
+import { PitcherScheduler } from './pitcher/scheduler'
 import { initFileLogging } from './logger'
 import {
   clearSessions,
@@ -115,6 +129,10 @@ const pendingNapkinChoices = new Map<string, (choiceId: string) => void>()
 let currentAgentAbort: AbortController | null = null
 let currentTranscribeAbort: AbortController | null = null
 
+// The main window, captured in createWindow(). Headless Pitcher pours use it to
+// mirror events to an open UI and to raise desktop notifications.
+let mainWindow: BrowserWindow | null = null
+
 function createWindow(): void {
   const window = new BrowserWindow({
     width: 1000,
@@ -138,6 +156,13 @@ function createWindow(): void {
       // the renderer can gate its own diagnostic logging without an IPC round-trip.
       additionalArguments: [`--app-debug=${config.debug ? '1' : '0'}`]
     }
+  })
+
+  // Keep a handle so headless Pitcher pours can mirror events to the UI and
+  // raise desktop notifications.
+  mainWindow = window
+  window.on('closed', () => {
+    if (mainWindow === window) mainWindow = null
   })
 
   // Window controls driven by the renderer's custom top bar.
@@ -563,6 +588,128 @@ ipcMain.on('agent:cancel', () => {
   pendingApprovals.clear()
 })
 
+// --- Pitcher: scheduled tasks ------------------------------------------------
+
+function emitPitcher(evt: PitcherEvent): void {
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('pitcher:event', evt)
+}
+
+// Run one Pitcher end-to-end. Auto-approves only tools on its allowlist; every
+// other tool call is denied so a scheduled task can't be steered (e.g. by
+// injected web content) into actions it was never granted. The pour is saved as
+// a normal conversation the user can reopen, and a desktop notification is
+// raised when the window isn't focused. Bounded retry guards against a flaky
+// local model that occasionally fails to call its tools.
+async function pourPitcher(p: Pitcher): Promise<PitcherRunResult> {
+  emitPitcher({ type: 'pitcher_started', id: p.id })
+
+  const messages: ChatMessage[] = [{ role: 'user', content: p.prompt }]
+  let napkin: Napkin | null = null
+  let finalText = ''
+
+  const emit = (e: AgentEvent): void => {
+    if (e.type === 'assistant_text') finalText = e.text
+    if (e.type === 'napkin_show') napkin = e.napkin
+    // Mirror to the window if the user happens to be watching.
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('agent:event', e)
+  }
+
+  // Whitelist approve: allow iff the qualified tool is explicitly permitted.
+  const approve: ApproveFn = ({ qualified }) => Promise.resolve(p.allowedTools.includes(qualified))
+
+  let lastErr: unknown = null
+  for (let attempt = 0; attempt < 2; attempt++) {
+    napkin = null
+    finalText = ''
+    const abort = new AbortController()
+    try {
+      // No onLimit/askNapkin: a headless pour must not block on user input, so
+      // the loop stops at its step budget and skips clarification instead.
+      await agent.run(messages, emit, approve, abort.signal)
+      lastErr = null
+      break
+    } catch (err) {
+      lastErr = err
+    }
+  }
+
+  const now = Date.now()
+  const list = readPitchers(appPath)
+  const idx = list.findIndex((x) => x.id === p.id)
+
+  if (lastErr) {
+    const error = lastErr instanceof Error ? lastErr.message : String(lastErr)
+    if (idx >= 0) {
+      list[idx] = { ...list[idx], lastStatus: 'error', lastError: error }
+      writePitchers(appPath, list)
+    }
+    if (mainWindow && !mainWindow.isFocused() && Notification.isSupported())
+      new Notification({ title: `Pitcher failed: ${p.name}`, body: error }).show()
+    emitPitcher({ type: 'pitcher_finished', id: p.id, ok: false, error })
+    return { id: p.id, ok: false, error }
+  }
+
+  // Persist the pour as a normal saved conversation the user can reopen later.
+  const sessionId = randomUUID()
+  const entries: TranscriptEntry[] = [{ kind: 'assistant', text: finalText || '(no reply)' }]
+  if (napkin) entries.push({ kind: 'napkin', napkin })
+  writeSession(appPath, {
+    id: sessionId,
+    title: `🥤 ${p.name}`,
+    createdAt: now,
+    updatedAt: now,
+    messageCount: 2,
+    model: config.model,
+    history: [...messages, { role: 'assistant', content: finalText }],
+    entries
+  })
+
+  if (idx >= 0) {
+    list[idx] = { ...list[idx], lastRunAt: now, lastStatus: 'ok', lastError: undefined }
+    writePitchers(appPath, list)
+  }
+  if (mainWindow && !mainWindow.isFocused() && Notification.isSupported())
+    new Notification({
+      title: `Fresh pour: ${p.name}`,
+      body: finalText.slice(0, 120) || 'Ready in your history.'
+    }).show()
+
+  emitPitcher({ type: 'pitcher_finished', id: p.id, ok: true, sessionId })
+  return { id: p.id, ok: true, sessionId }
+}
+
+const scheduler = new PitcherScheduler(
+  appPath,
+  (p) => pourPitcher(p).then(() => undefined),
+  // "busy" = an interactive agent turn is in flight; never pour over the user.
+  () => currentAgentAbort !== null
+)
+
+ipcMain.handle('pitcher:list', () => readPitchers(appPath))
+
+ipcMain.handle('pitcher:save', (_event, pitcher: Pitcher) => {
+  const list = readPitchers(appPath)
+  const idx = list.findIndex((x) => x.id === pitcher.id)
+  if (idx >= 0) list[idx] = pitcher
+  else list.push(pitcher)
+  writePitchers(appPath, list)
+  scheduler.reload()
+  return list
+})
+
+ipcMain.handle('pitcher:delete', (_event, id: string) => {
+  const list = readPitchers(appPath).filter((x) => x.id !== id)
+  writePitchers(appPath, list)
+  scheduler.reload()
+  return list
+})
+
+ipcMain.handle('pitcher:run', (_event, id: string): Promise<PitcherRunResult> => {
+  const p = readPitchers(appPath).find((x) => x.id === id)
+  if (!p) return Promise.resolve({ id, ok: false, error: 'Pitcher not found' })
+  return pourPitcher(p)
+})
+
 // --- Lifecycle ---------------------------------------------------------------
 
 app.whenReady().then(async () => {
@@ -594,6 +741,11 @@ app.whenReady().then(async () => {
   await mcp.connectAll(config.servers)
   createWindow()
 
+  // Arm scheduled Pitchers now that the window exists: runs on-open tasks and
+  // any daily task whose time was missed while the app was closed, then keeps
+  // timers for future daily fires.
+  scheduler.start()
+
   // Ensure the active model is loaded at our default context so the budget
   // doesn't revert to the small server fallback after a restart. Best-effort
   // and non-blocking, the window is already up.
@@ -613,5 +765,6 @@ app.on('window-all-closed', async () => {
 })
 
 app.on('before-quit', async () => {
+  scheduler.stop()
   await mcp.closeAll()
 })

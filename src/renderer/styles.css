@@ -2140,6 +2140,129 @@ button.server-status:hover {
   background: var(--panel);
 }
 
+/* --- Pitchers (scheduled tasks) ------------------------------------------- */
+
+.history-item.disabled {
+  opacity: 0.6;
+}
+
+.pantry-add {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: #1a1a1a;
+  border-radius: 6px;
+  padding: 6px 12px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.pantry-add:hover {
+  filter: brightness(1.05);
+}
+
+.pantry-add:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.pitcher-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 14px;
+  overflow-y: auto;
+}
+
+.pitcher-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.pitcher-field > input,
+.pitcher-field > textarea,
+.pitcher-field > select,
+.pitcher-row > input,
+.pitcher-row > select {
+  box-sizing: border-box;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 13px;
+  font-weight: 400;
+  font-family: inherit;
+}
+
+.pitcher-field > input:focus,
+.pitcher-field > textarea:focus,
+.pitcher-field > select:focus,
+.pitcher-row > input:focus,
+.pitcher-row > select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.pitcher-field > textarea {
+  resize: vertical;
+}
+
+.pitcher-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.pitcher-hint {
+  font-weight: 400;
+  font-style: normal;
+  color: var(--muted);
+  opacity: 0.8;
+}
+
+.pitcher-tools {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 180px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px;
+  background: var(--bg);
+}
+
+.pitcher-tool {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.pitcher-tool-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pitcher-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 /* --- The Napkin (rich artifact side panel) -------------------------------- */
 
 /* The chat column and the napkin dock sit side by side below the top bar. */

@@ -270,6 +270,51 @@ export interface StoredSession extends SessionSummary {
   summary?: string
 }
 
+/** How a Pitcher fires. `on-open` runs once per app launch; `daily` runs at a
+ * local "HH:MM" each day (and catches up on launch if that time was missed
+ * while the app was closed). */
+export type PitcherTrigger =
+  | { type: 'on-open' }
+  | { type: 'daily'; at: string } // "HH:MM", 24-hour local time
+
+/** Where a finished pour is served. File output is a v2 concern. */
+export type PitcherOutput = 'napkin' | 'chat'
+
+/** A scheduled task ("Pitcher"): a saved prompt the app pours on a trigger and
+ * serves fresh. Stored in config/pitchers.json. */
+export interface Pitcher {
+  id: string
+  /** Display name, also used as the saved-conversation title. */
+  name: string
+  enabled: boolean
+  /** The instruction handed to the agent when the Pitcher pours. */
+  prompt: string
+  trigger: PitcherTrigger
+  output: PitcherOutput
+  /** Qualified tool names (`<serverId>__<toolName>`) auto-approved during a
+   * pour. Anything not listed is denied, so a scheduled task never gets a blank
+   * cheque to run tools it wasn't explicitly granted. */
+  allowedTools: string[]
+  /** Epoch ms of the last successful pour, for daily catch-up on launch. */
+  lastRunAt?: number
+  lastStatus?: 'ok' | 'error'
+  lastError?: string
+}
+
+/** Result of a single pour, returned to the renderer's "Pour now" button. */
+export interface PitcherRunResult {
+  id: string
+  ok: boolean
+  /** Saved conversation id, when the pour produced one. */
+  sessionId?: string
+  error?: string
+}
+
+/** Pushed to the renderer as a Pitcher's run state changes. */
+export type PitcherEvent =
+  | { type: 'pitcher_started'; id: string }
+  | { type: 'pitcher_finished'; id: string; ok: boolean; sessionId?: string; error?: string }
+
 /** Streamed events the main process pushes to the renderer during a turn. */
 export type AgentEvent =
   | { type: 'assistant_text'; text: string }
@@ -414,6 +459,16 @@ export interface RendererApi {
   /** Ask the model for a short auto-title for a conversation. Falls back to a
    * trimmed first user message when the model is unavailable. */
   suggestTitle(history: ChatMessage[]): Promise<string>
+  /** List all configured Pitchers (scheduled tasks). */
+  listPitchers(): Promise<Pitcher[]>
+  /** Create or update a Pitcher, then reschedule. Returns the refreshed list. */
+  savePitcher(pitcher: Pitcher): Promise<Pitcher[]>
+  /** Delete a Pitcher. Returns the refreshed list. */
+  deletePitcher(id: string): Promise<Pitcher[]>
+  /** Pour a Pitcher immediately ("Pour now"). */
+  runPitcher(id: string): Promise<PitcherRunResult>
+  /** Subscribe to Pitcher run-state events. Returns an unsubscribe function. */
+  onPitcherEvent(handler: (event: PitcherEvent) => void): () => void
   /** Minimize the window. */
   minimizeWindow(): void
   /** Toggle between maximized and restored. */
