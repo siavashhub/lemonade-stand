@@ -1,7 +1,7 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, Notification } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, Notification, shell } from 'electron'
 import { randomUUID } from 'node:crypto'
-import { copyFileSync, existsSync, mkdirSync, readdirSync } from 'node:fs'
-import { join } from 'node:path'
+import { copyFileSync, existsSync, mkdirSync, readdirSync, statSync } from 'node:fs'
+import { dirname, isAbsolute, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type {
   AgentEvent,
@@ -297,7 +297,14 @@ ipcMain.handle('history:clear', () => clearSessions(appPath))
 // message when the model is slow or offline so saving never blocks on this.
 ipcMain.handle('history:suggest-title', async (_event, messages: ChatMessage[]) => {
   const firstUser = messages.find((m) => m.role === 'user')
-  const fallback = (firstUser?.content ?? 'New conversation').trim().slice(0, 60)
+  const firstText =
+    typeof firstUser?.content === 'string'
+      ? firstUser.content
+      : (firstUser?.content ?? [])
+          .filter((p): p is { type: 'text'; text: string } => p.type === 'text')
+          .map((p) => p.text)
+          .join(' ')
+  const fallback = (firstText || 'New conversation').trim().slice(0, 60)
   try {
     const title = await lemonade.generateTitle(messages as never)
     return title || fallback
@@ -380,10 +387,14 @@ ipcMain.handle('agent:compact', (_event, messages: ChatMessage[]) =>
   agent.compact(messages)
 )
 
-// Reload the chat model with a new runtime context size (server /load).
-ipcMain.handle('agent:set-context', (_event, ctxSize: number) =>
-  lemonade.setContextSize(ctxSize)
-)
+// Reload the chat model with a new runtime context size (server /load). Persist
+// the chosen size so it survives restarts (dev: config/settings.local.json;
+// packaged: the per-user settings.json). Only save when the reload succeeded.
+ipcMain.handle('agent:set-context', async (_event, ctxSize: number) => {
+  const info = await lemonade.setContextSize(ctxSize)
+  if (!info.error) writeSettings(appPath, { contextSize: info.contextSize })
+  return info
+})
 
 // Models the server knows about, for the model picker.
 ipcMain.handle('agent:list-models', () => lemonade.listModels())
@@ -435,6 +446,55 @@ ipcMain.on('agent:set-bypass', (_event, enabled: boolean) => {
   bypassApprovals = enabled
 })
 
+// Roots of every configured path-based stdio server (e.g. the Filesystem
+// server's allowed directory). Filesystem tools return paths relative to their
+// root, so a napkin's folderPath can be relative (e.g. "notes"); we resolve it
+// against these roots before opening.
+function configuredServerRoots(): string[] {
+  const catalog = loadCatalog(appPath)
+  const roots: string[] = []
+  for (const server of readServers(appPath)) {
+    const entry = catalog.find((c) => c.id === server.id)
+    const root = entry ? pathForServer(entry, server) : undefined
+    if (root && isAbsolute(root)) roots.push(root)
+  }
+  return roots
+}
+
+// Resolve a possibly-relative folder path to an absolute, existing location.
+// Absolute paths are used as-is; relative paths are tried against each
+// configured server root. Files resolve to their containing directory.
+function resolveExplorerTarget(rawPath: string): string {
+  const unquoted = rawPath.replace(/^['"]|['"]$/g, '')
+  const toDir = (p: string): string =>
+    existsSync(p) && statSync(p).isFile() ? dirname(p) : p
+
+  if (isAbsolute(unquoted)) return toDir(unquoted)
+
+  for (const root of configuredServerRoots()) {
+    const candidate = join(root, unquoted)
+    if (existsSync(candidate)) return toDir(candidate)
+  }
+  // Nothing matched; return the best guess so the error names a real path.
+  const roots = configuredServerRoots()
+  return roots.length > 0 ? join(roots[0], unquoted) : unquoted
+}
+
+ipcMain.handle('explorer:open-folder', async (_event, folderPath: string) => {
+  try {
+    const rawPath = String(folderPath ?? '').trim()
+    if (!rawPath) throw new Error('No folder path provided')
+
+    const target = resolveExplorerTarget(rawPath)
+    if (!existsSync(target)) throw new Error(`Path not found: ${target}`)
+    const openError = await shell.openPath(target)
+    if (openError) throw new Error(openError)
+  } catch (err) {
+    console.error('[explorer] failed to open folder:', err)
+    throw err
+  }
+})
+
 // Renderer's answer to a step_limit_request: true to grant another step budget,
 // false to stop. Resolving the stored promise unblocks the agent loop.
 ipcMain.on('agent:continue', (_event, id: string, cont: boolean) => {
@@ -475,6 +535,10 @@ function describeEvent(e: AgentEvent): string {
       return `napkin_choice_request choices=${e.choices.length} prompt=${e.prompt.slice(0, 80)}`
     case 'assistant_text':
       return `assistant_text len=${e.text.trim().length}`
+    case 'reasoning':
+      return `reasoning len=${e.text.trim().length}`
+    case 'reasoning_delta':
+      return `reasoning_delta len=${e.text.length}`
     case 'tool_approval_request':
       return `tool_approval_request ${e.server}__${e.tool}`
     case 'step_limit_request':
@@ -747,10 +811,12 @@ app.whenReady().then(async () => {
   scheduler.start()
 
   // Ensure the active model is loaded at our default context so the budget
-  // doesn't revert to the small server fallback after a restart. Best-effort
-  // and non-blocking, the window is already up.
+  // doesn't revert to the small server fallback after a restart. When the user
+  // has pinned a context size in the UI, honor that saved size instead so the
+  // server is actually running the window we budget against. Best-effort and
+  // non-blocking, the window is already up.
   void lemonade
-    .ensureModelLoaded()
+    .ensureModelLoaded(config.contextSize)
     .then(() => console.log(`[config] active chat model on server: ${lemonade.activeModel}`))
     .catch((err) => console.error('[config] ensureModelLoaded failed:', err))
 

@@ -3,14 +3,53 @@
 
 export type Role = 'system' | 'user' | 'assistant' | 'tool'
 
+/** A plain-text segment of a multi-part message. */
+export interface TextContentPart {
+  type: 'text'
+  text: string
+}
+
+/** An image segment of a multi-part message, shown to vision-capable models.
+ * `url` is a data URL (`data:<mime>;base64,...`) so the image travels inline. */
+export interface ImageContentPart {
+  type: 'image_url'
+  image_url: { url: string }
+}
+
+/** One part of a multimodal user message (text or image). Used when the user
+ * attaches pictures so a vision model can see them alongside the prompt. */
+export type MessageContentPart = TextContentPart | ImageContentPart
+
 export interface ChatMessage {
   role: Role
-  content: string
+  /** Plain string for normal turns, or an array of parts when a user message
+   * carries attached images for a vision model. */
+  content: string | MessageContentPart[]
   /** Present on assistant turns that requested tools; opaque passthrough. */
   tool_calls?: unknown
   /** Present on tool-result turns. */
   tool_call_id?: string
   name?: string
+}
+
+/** A file or image the user attached to a message so the agent can work on it.
+ * Images can be shown to a vision model and previewed inline; any file dragged
+ * from disk carries its absolute `path` so the agent's filesystem tools can
+ * open it. */
+export interface MessageAttachment {
+  /** Base file name for display, e.g. "diagram.png". */
+  name: string
+  /** 'image' when it can be previewed / shown to a vision model, else 'file'. */
+  kind: 'image' | 'file'
+  /** Absolute path on disk, when known (items dragged/pasted from the OS). */
+  path?: string
+  /** For images: a data URL used for the thumbnail and, when sent to a vision
+   * model, the image content itself. */
+  dataUrl?: string
+  /** MIME type, when known. */
+  mimeType?: string
+  /** Size in bytes, when known. */
+  size?: number
 }
 
 /** One step in the agent's working plan for a multi-step task. The model
@@ -53,6 +92,8 @@ export interface Napkin {
   mimeType?: string
   /** Descriptive alt text for `kind:'image'`. */
   alt?: string
+  /** Folder path to open in explorer (shown if napkin came from filesystem tool). */
+  folderPath?: string
 }
 
 /** One selectable option in an `ask_napkin` clarification prompt. */
@@ -237,8 +278,14 @@ export type ApprovalDecision = 'approve' | 'deny' | 'always'
  * restored exactly as it looked, not just as the model saw it. Kept here so both
  * processes can persist/round-trip it. */
 export type TranscriptEntry =
-  | { kind: 'user'; text: string }
+  | { kind: 'user'; text: string; attachments?: MessageAttachment[] }
   | { kind: 'assistant'; text: string }
+  // The model's chain-of-thought, shown as a live-streaming block that collapses
+  // to a one-line summary once the turn moves on. Kept in the visual transcript
+  // (so it persists/restores) but not in model history. `streaming` is transient
+  // UI state , true only while the thought is still being written; it is absent
+  // (falsy) on persisted/restored entries, which always render collapsed.
+  | { kind: 'reasoning'; text: string; streaming?: boolean }
   | { kind: 'tool'; label: string; detail: string; ok?: boolean }
   | { kind: 'plan'; steps: PlanStep[] }
   | { kind: 'napkin'; napkin: Napkin }
@@ -318,6 +365,13 @@ export type PitcherEvent =
 /** Streamed events the main process pushes to the renderer during a turn. */
 export type AgentEvent =
   | { type: 'assistant_text'; text: string }
+  // A chunk of the model's chain-of-thought as it streams, surfaced for a live
+  // "thinking" preview. Purely for display , never fed back into history.
+  | { type: 'reasoning_delta'; text: string }
+  // The full, final chain-of-thought for a turn. Marks the live preview done so
+  // its panel collapses to a summary. Display only: never fed back into the
+  // model-facing history (would bloat the context window) and never spoken by TTS.
+  | { type: 'reasoning'; text: string }
   | { type: 'tool_call'; server: string; tool: string; args: unknown }
   | { type: 'tool_result'; server: string; tool: string; ok: boolean; preview: string }
   // The model created or revised its working plan via the built-in `update_plan`
@@ -366,6 +420,10 @@ export interface RendererApi {
   sendMessage(messages: ChatMessage[]): Promise<void>
   /** Halt the in-flight agent turn started by `sendMessage`. */
   cancelMessage(): void
+  /** Resolve the absolute filesystem path of a dropped/pasted `File`, so items
+   * dragged from the OS can be handed to the agent's filesystem tools. Returns
+   * an empty string when the file has no on-disk path (e.g. pasted image data). */
+  getPathForFile(file: File): string
   listTools(): Promise<AgentTool[]>
   /** Playful "agent is working" phrases for the thinking indicator. */
   getThinkingPhrases(): Promise<string[]>
@@ -475,4 +533,6 @@ export interface RendererApi {
   toggleMaximizeWindow(): void
   /** Close the window. */
   closeWindow(): void
+  /** Open a folder in Windows Explorer (or equivalent file manager). */
+  openFolderInExplorer(folderPath: string): Promise<void>
 }

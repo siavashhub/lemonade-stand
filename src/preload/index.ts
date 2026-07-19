@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron'
+import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import type {
   AgentEvent,
   ApprovalDecision,
@@ -21,6 +21,14 @@ const api: RendererApi = {
 
   cancelMessage(): void {
     ipcRenderer.send('agent:cancel')
+  },
+
+  getPathForFile(file: File): string {
+    try {
+      return webUtils.getPathForFile(file)
+    } catch {
+      return ''
+    }
   },
 
   listTools() {
@@ -205,6 +213,10 @@ const api: RendererApi = {
 
   closeWindow(): void {
     ipcRenderer.send('window:close')
+  },
+
+  async openFolderInExplorer(folderPath: string): Promise<void> {
+    return await ipcRenderer.invoke('explorer:open-folder', folderPath)
   }
 }
 
