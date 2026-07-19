@@ -215,15 +215,25 @@ export class Agent {
           return
         }
 
-        const wantsRealWork = toolCalls.some(
+        const realCalls = toolCalls.filter(
           (c) => c.type === 'function' && c.function.name !== PLAN_TOOL
         )
+        const wantsRealWork = realCalls.length > 0
 
-        // Option B: the task is clearly multi-step (already did FORCE_PLAN_AFTER
-        // real-work turns) but the model still hasn't planned. Drop this
-        // un-planned work turn — we never pushed it, so there are no orphaned
-        // tool_calls — and re-ask with a nudge so the model plans first.
-        if (wantsRealWork && !hasPlanned && !forcedPlan && step >= FORCE_PLAN_AFTER) {
+        // Option B: force a single planning round-trip when the model is clearly
+        // doing multi-step work but hasn't planned. Two triggers cover both
+        // model styles: (a) it has already done FORCE_PLAN_AFTER work turns
+        // (one-tool-per-turn models), or (b) this single completion batches 2+
+        // tool calls (models that request everything at once). A genuinely
+        // single-step task never hits either, so trivial requests stay
+        // plan-free. We drop this un-planned turn — it was never pushed, so no
+        // orphaned tool_calls — and re-ask with a nudge so the model plans first.
+        if (
+          wantsRealWork &&
+          !hasPlanned &&
+          !forcedPlan &&
+          (step >= FORCE_PLAN_AFTER || realCalls.length >= 2)
+        ) {
           forcedPlan = true
           messages.push({ role: 'user', content: FORCE_PLAN_NUDGE })
           continue

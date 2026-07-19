@@ -1103,7 +1103,7 @@ export function App(): JSX.Element {
             onClick={() => setActivePanel('models')}
             title="Choose the model the agent runs on"
           >
-            <CpuChipIcon /> Models
+            <CpuChipIcon /> Models{context?.model ? ` (${context.model})` : ''}
           </button>
           <button
             className={`speak-toggle ${speaking ? 'stop-speaking' : speak ? 'on' : ''}`}

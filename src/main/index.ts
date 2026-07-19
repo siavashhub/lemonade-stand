@@ -381,6 +381,41 @@ ipcMain.on('agent:continue', (_event, id: string, cont: boolean) => {
   }
 })
 
+// Compact one-line description of an agent event for the debug log, so a full
+// turn (model completions, tool calls, plan updates, budget) can be read back
+// from the log file when diagnosing a run.
+function describeEvent(e: AgentEvent): string {
+  switch (e.type) {
+    case 'tool_call':
+      return `tool_call ${e.server}__${e.tool} args=${JSON.stringify(e.args).slice(0, 200)}`
+    case 'tool_result':
+      return `tool_result ${e.server}__${e.tool} ok=${e.ok} preview=${e.preview.slice(0, 120)}`
+    case 'plan_updated':
+      return `plan_updated steps=${e.steps.length} [${e.steps
+        .map((s) => `${s.status[0]}:${s.title}`)
+        .join(' | ')
+        .slice(0, 300)}]`
+    case 'assistant_text':
+      return `assistant_text len=${e.text.trim().length}`
+    case 'tool_approval_request':
+      return `tool_approval_request ${e.server}__${e.tool}`
+    case 'step_limit_request':
+      return `step_limit_request steps=${e.steps}`
+    case 'context_usage':
+      return `context_usage used=${e.breakdown.usedTokens}/${e.breakdown.contextSize}`
+    case 'context_warning':
+      return `context_warning est=${e.estimatedTokens} ctx=${e.contextSize} overflow=${e.overflow}`
+    case 'history_compacted':
+      return `history_compacted messages=${e.messages.length}`
+    case 'error':
+      return `error ${e.message}`
+    case 'done':
+      return 'done'
+    default:
+      return e.type
+  }
+}
+
 ipcMain.handle('agent:send', async (event, messages: ChatMessage[]) => {
   const send = (agentEvent: AgentEvent): void => {
     if (!event.sender.isDestroyed()) event.sender.send('agent:event', agentEvent)
@@ -389,8 +424,13 @@ ipcMain.handle('agent:send', async (event, messages: ChatMessage[]) => {
   // Wrap the emit so a final assistant turn is also synthesized to speech when
   // TTS is on. Fire-and-forget: playback lags the text slightly but never
   // blocks the loop, and a TTS failure only logs.
+  // TTS is on. Fire-and-forget: playback lags the text slightly but never
+  // blocks the loop, and a TTS failure only logs.
   const emit = (agentEvent: AgentEvent): void => {
     send(agentEvent)
+    // Trace every agent event to the log (when debug is on) so a run can be
+    // reconstructed from the log file: tool calls, plan updates, budget, etc.
+    debugLog(`[agent] ${describeEvent(agentEvent)}`)
     if (agentEvent.type === 'assistant_text') {
       debugLog(
         `[tts] assistant_text: speakEnabled=${speakEnabled} textLen=${agentEvent.text.trim().length}`
@@ -459,6 +499,17 @@ app.whenReady().then(async () => {
   const logFile = initFileLogging(app.getPath('logs'), config.debug, `v${app.getVersion()}`)
   if (logFile) console.log(`[logger] file logging enabled -> ${logFile}`)
 
+  // Dump the effective config so a run's behaviour can be compared against a
+  // known-good one (e.g. dev vs packaged). The model, step budget, and system
+  // prompt are the usual sources of dev/packaged divergence since dev reads a
+  // project .env + repo config while a packaged build has neither.
+  console.log(
+    `[config] configDir=${appPath} packaged=${app.isPackaged} model=${config.model} ` +
+      `maxSteps=${config.maxSteps} compactThreshold=${config.compactThreshold} ` +
+      `requireApproval=${config.requireApproval} contextSize=${config.contextSize ?? 'auto'} ` +
+      `systemPromptLen=${config.systemPrompt.length} servers=${config.servers.length}`
+  )
+
   // Give Windows a stable app identity so the taskbar uses our icon and groups
   // windows under one entry.
   if (process.platform === 'win32') app.setAppUserModelId('com.lemonade.stand')
@@ -473,7 +524,10 @@ app.whenReady().then(async () => {
   // Ensure the active model is loaded at our default context so the budget
   // doesn't revert to the small server fallback after a restart. Best-effort
   // and non-blocking — the window is already up.
-  void lemonade.ensureModelLoaded()
+  void lemonade
+    .ensureModelLoaded()
+    .then(() => console.log(`[config] active chat model on server: ${lemonade.activeModel}`))
+    .catch((err) => console.error('[config] ensureModelLoaded failed:', err))
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()

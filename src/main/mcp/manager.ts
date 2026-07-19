@@ -1,10 +1,22 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
+import { existsSync, readFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
+import { homedir } from 'node:os'
+import { delimiter, dirname, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import type { ChatCompletionTool } from 'openai/resources/chat/completions'
 import type { AgentTool, McpServerConfig } from '@shared/types'
 
 const SEP = '__'
+
+const nodeRequire = createRequire(import.meta.url)
+const HERE = fileURLToPath(new URL('.', import.meta.url))
+
+// `npx`-style launchers we transparently reroute through Electron's own Node so
+// end users need not install Node/npm themselves.
+const NODE_LAUNCHERS = new Set(['npx', 'npx.cmd', 'npx.exe'])
 
 // OpenAI tool names must match ^[a-zA-Z0-9_-]{1,64}$; sanitize any exotic
 // server/tool identifiers so the model can address them.
@@ -20,6 +32,107 @@ function cleanEnv(env: NodeJS.ProcessEnv): Record<string, string> {
     if (typeof v === 'string') out[k] = v
   }
   return out
+}
+
+// Directories prepended to a stdio server's PATH so its launcher (uvx/uv) and
+// sibling tools resolve even when the app's own PATH is stale (e.g. uv was
+// installed after the app started) or the user never installed uv at all — in
+// packaged builds we ship uv under resources/bin (-> <resources>/bin).
+let cachedBinDirs: string[] | null = null
+function bundledBinDirs(): string[] {
+  if (cachedBinDirs) return cachedBinDirs
+  const candidates = [
+    process.resourcesPath ? join(process.resourcesPath, 'bin') : '',
+    join(process.cwd(), 'resources', 'bin'),
+    join(HERE, '..', '..', 'resources', 'bin'),
+    // Where the official uv installer drops uv/uvx for the current user.
+    join(homedir(), '.local', 'bin')
+  ]
+  cachedBinDirs = candidates.filter((d) => d && existsSync(d))
+  return cachedBinDirs
+}
+
+// Windows env var names are case-insensitive; find the real PATH key or default.
+function pathKey(env: Record<string, string>): string {
+  if (process.platform === 'win32') {
+    return Object.keys(env).find((k) => k.toLowerCase() === 'path') ?? 'Path'
+  }
+  return 'PATH'
+}
+
+function withBundledPath(env: Record<string, string>): Record<string, string> {
+  const dirs = bundledBinDirs()
+  if (dirs.length === 0) return env
+  const key = pathKey(env)
+  env[key] = [...dirs, env[key] ?? ''].filter(Boolean).join(delimiter)
+  return env
+}
+
+// Strip a version suffix from an npm spec: '@scope/pkg@1.2.3' -> '@scope/pkg'.
+function packageName(spec: string): string {
+  const at = spec.indexOf('@', spec.startsWith('@') ? 1 : 0)
+  return at === -1 ? spec : spec.slice(0, at)
+}
+
+// Resolve an `npx -y <pkg> ...args` invocation to the package's bin entry so it
+// can be run directly by Node, skipping npx and its download. Returns null when
+// the package isn't bundled as a dependency, so the caller falls back to npx.
+function resolveNodePackage(args: string[]): { entry: string; rest: string[] } | null {
+  const rest = [...args]
+  const flags = new Set(['-y', '--yes', '-q', '--quiet', '--'])
+  while (rest.length && flags.has(rest[0])) rest.shift()
+  const spec = rest.shift()
+  if (!spec) return null
+  const name = packageName(spec)
+  try {
+    const pkgJsonPath = nodeRequire.resolve(`${name}/package.json`)
+    const pkg = JSON.parse(readFileSync(pkgJsonPath, 'utf8')) as {
+      name?: string
+      bin?: string | Record<string, string>
+    }
+    let binRel: string | undefined
+    if (typeof pkg.bin === 'string') binRel = pkg.bin
+    else if (pkg.bin) binRel = pkg.bin[name] ?? pkg.bin[pkg.name ?? ''] ?? Object.values(pkg.bin)[0]
+    if (!binRel) return null
+    return { entry: resolve(dirname(pkgJsonPath), binRel), rest }
+  } catch {
+    return null
+  }
+}
+
+interface StdioLaunch {
+  command: string
+  args: string[]
+  env: Record<string, string>
+}
+
+// Turn a configured stdio server into the actual command to spawn. Two
+// transforms make bundled/ambient toolchains unnecessary for end users:
+//   • PATH is augmented with our bundled bin dir + uv's install dir, so `uvx`
+//     resolves without a system-wide install or a freshly-restarted shell.
+//   • `npx <pkg>` launchers are rerouted through Electron's built-in Node
+//     (process.execPath + ELECTRON_RUN_AS_NODE) against the bundled package, so
+//     Node itself need not be installed.
+function resolveStdioLaunch(server: {
+  command: string
+  args?: string[]
+  env?: Record<string, string>
+}): StdioLaunch {
+  const env = withBundledPath({ ...cleanEnv(process.env), ...server.env })
+  const command = server.command
+  const args = server.args ?? []
+
+  if (NODE_LAUNCHERS.has(command.toLowerCase())) {
+    const resolved = resolveNodePackage(args)
+    if (resolved) {
+      return {
+        command: process.execPath,
+        args: [resolved.entry, ...resolved.rest],
+        env: { ...env, ELECTRON_RUN_AS_NODE: '1' }
+      }
+    }
+  }
+  return { command, args, env }
 }
 
 interface Connected {
@@ -61,15 +174,18 @@ export class McpManager {
     const client = new Client({ name: 'lemonade-stand', version: '0.1.0' })
 
     if (server.transport === 'stdio') {
+      // resolveStdioLaunch augments PATH with our bundled uv (resources/bin)
+      // and uv's user install dir, and reroutes npx launchers through
+      // Electron's built-in Node — so the uvx/npx toolchains don't need to be
+      // installed (or on a freshly-restarted PATH) for a server to start. The
+      // MCP SDK otherwise spawns with a stripped env, which is why stdio servers
+      // connect in `npm run dev` but silently fail in a packaged build. Config
+      // `env` overrides still win.
+      const launch = resolveStdioLaunch(server)
       const transport = new StdioClientTransport({
-        command: server.command,
-        args: server.args ?? [],
-        // Inherit the app's environment (notably PATH) so the launcher — npx,
-        // node, uvx, etc. — resolves when the app is started from the OS shell
-        // rather than a terminal. The MCP SDK otherwise spawns with a stripped
-        // default env, which is why stdio servers connect in `npm run dev` but
-        // silently fail in a packaged build. Config `env` overrides still win.
-        env: { ...cleanEnv(process.env), ...server.env }
+        command: launch.command,
+        args: launch.args,
+        env: launch.env
       })
       await client.connect(transport)
     } else {
