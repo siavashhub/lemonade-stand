@@ -2165,16 +2165,16 @@ button.server-status:hover {
   background: var(--panel);
   border-left: 1px solid var(--border);
   box-shadow: -12px 0 40px -24px rgba(0, 0, 0, 0.5);
-  animation: napkin-in 0.18s ease-out;
+  animation: napkin-drawer 0.5s cubic-bezier(0.7, 0, 0.3, 1);
 }
 
-@keyframes napkin-in {
+@keyframes napkin-drawer {
   from {
-    transform: translateX(20px);
-    opacity: 0.3;
+    clip-path: inset(0 100% 0 0);
+    opacity: 0;
   }
   to {
-    transform: translateX(0);
+    clip-path: inset(0 0 0 0);
     opacity: 1;
   }
 }
