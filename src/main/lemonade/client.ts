@@ -644,13 +644,16 @@ export class LemonadeClient {
       if (typeof entry?.recipe_options?.ctx_size === 'number') {
         this.cachedServerContext = entry.recipe_options.ctx_size
       }
+      // The user explicitly changed context from the UI. Honor that live choice
+      // for the current session even when an env/config override was present,
+      // so budget checks and warnings reflect what the server is now running.
+      this.contextOverride = undefined
       return {
         model: this.model,
         contextSize: this.cachedServerContext,
         maxContextWindow: this.cachedMaxContext,
         reserve: this.completionReserve,
-        // An override still wins for budgeting; report the true source.
-        source: this.contextOverride ? 'override' : 'server'
+        source: 'server'
       }
     } catch (err) {
       const info = await this.getContextInfo()
