@@ -7,39 +7,6 @@
       "url": "http://localhost:13305/mcp",
       "enabled": true,
       "note": "Your running lemond's own MCP gateway. Enabling this exposes lemonade_chat / lemonade_omni / lemonade_generate_image / lemonade_transcribe_audio / lemonade_list_models as tools to the agent. If lemond runs with LEMONADE_API_KEY, add an Authorization header in code/config."
-    },
-    {
-      "id": "filesystem",
-      "transport": "stdio",
-      "command": "npx",
-      "args": [
-        "-y",
-        "@modelcontextprotocol/server-filesystem",
-        "C:\\temp\\lemonade-stand"
-      ],
-      "enabled": true
-    },
-    {
-      "id": "time",
-      "transport": "stdio",
-      "command": "uvx",
-      "args": [
-        "mcp-server-time"
-      ],
-      "enabled": true
-    },
-    {
-      "id": "fetch",
-      "transport": "stdio",
-      "command": "uvx",
-      "args": [
-        "mcp-server-fetch",
-        "--user-agent",
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
-        "--ignore-robots-txt"
-      ],
-      "enabled": true,
-      "note": "Default bot User-Agent gets 429'd by sites like yahoo.com. A browser UA avoids most rate-limit blocks. Some sites (e.g. yahoo.com root) may still 429 or need a specific article URL."
     }
   ]
 }
