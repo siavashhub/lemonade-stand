@@ -3,7 +3,7 @@ import type {
   ChatCompletionMessageToolCall,
   ChatCompletionTool
 } from 'openai/resources/chat/completions'
-import type { AgentEvent, ChatMessage, PlanStep } from '@shared/types'
+import type { AgentEvent, ChatMessage, Napkin, NapkinChoice, PlanStep } from '@shared/types'
 import type { LemonadeClient } from '../lemonade/client'
 import type { McpManager } from '../mcp/manager'
 
@@ -22,6 +22,17 @@ export type ApproveFn = (params: {
 // process implements this by prompting the renderer; a non-interactive caller
 // can omit it, in which case the agent stops at the limit as before.
 export type ContinueFn = (steps: number) => Promise<boolean>
+
+// Presents a multiple-choice clarifying question to the user and resolves with
+// the id of the option they picked. The main process implements this by
+// prompting the renderer (the choices render in the Napkin panel) and awaiting
+// the reply. A non-interactive caller can omit it, in which case `ask_napkin`
+// falls back to telling the model to ask in plain text.
+export type AskNapkinFn = (params: {
+  title: string
+  prompt: string
+  choices: NapkinChoice[]
+}) => Promise<string>
 
 // Safety valve: if the model calls only `update_plan` this many turns in a row
 // without doing any real work, stop rather than spin forever on plan edits.
@@ -90,6 +101,100 @@ const PLAN_TOOL_DEF: ChatCompletionTool = {
   }
 }
 
+// Names of the built-in Napkin tools. Like `update_plan`, they are not backed by
+// any MCP server: the loop synthesizes them, handles their calls internally, and
+// surfaces the result to the UI. Kept flat (no `__` namespace) so they can't
+// collide with a server tool.
+const SHOW_NAPKIN_TOOL = 'show_napkin'
+const ASK_NAPKIN_TOOL = 'ask_napkin'
+
+// Every tool handled in-process rather than dispatched to an MCP server. Used to
+// separate real (task-advancing) tool calls from the built-ins when deciding
+// whether to force a planning round-trip.
+const BUILTIN_TOOLS = new Set([PLAN_TOOL, SHOW_NAPKIN_TOOL, ASK_NAPKIN_TOOL])
+
+// Schema for `show_napkin`: lets the model display a rich artifact in the side
+// panel to enrich a reply beyond plain text. Raw HTML / live browsing is
+// deliberately not offered; the renderer sanitizes everything before display.
+const SHOW_NAPKIN_TOOL_DEF: ChatCompletionTool = {
+  type: 'function',
+  function: {
+    name: SHOW_NAPKIN_TOOL,
+    description:
+      'Show a rich artifact in the side "Napkin" panel to enrich your reply beyond plain text: ' +
+      'a formatted code block the user can copy, rendered Markdown, a Mermaid diagram, an SVG ' +
+      'drawing, or an image. Use it when a visual or copyable artifact genuinely helps (code, ' +
+      'diagrams, tables, illustrations). Keep replying in text as usual; the napkin supplements it.',
+    parameters: {
+      type: 'object',
+      properties: {
+        title: { type: 'string', description: 'Short heading for the panel.' },
+        kind: {
+          type: 'string',
+          enum: ['code', 'markdown', 'mermaid', 'svg', 'image'],
+          description:
+            "The artifact type. 'code' = source code; 'markdown' = rich text; 'mermaid' = a " +
+            "Mermaid diagram definition; 'svg' = raw SVG markup; 'image' = base64-encoded image bytes."
+        },
+        content: {
+          type: 'string',
+          description:
+            'The artifact body: source text for code/markdown/mermaid/svg, or base64-encoded ' +
+            'bytes (no data: prefix) for an image.'
+        },
+        language: {
+          type: 'string',
+          description: "For kind:'code', the language for display, e.g. 'ts', 'python', 'json'."
+        },
+        mimeType: {
+          type: 'string',
+          description: "For kind:'image', the image MIME type, e.g. 'image/png'."
+        },
+        alt: { type: 'string', description: "For kind:'image', descriptive alt text." }
+      },
+      required: ['title', 'kind', 'content']
+    }
+  }
+}
+
+// Schema for `ask_napkin`: a blocking, multiple-choice clarifying question. The
+// loop pauses on the call until the user picks an option in the Napkin panel,
+// then feeds their choice back to the model as the tool result.
+const ASK_NAPKIN_TOOL_DEF: ChatCompletionTool = {
+  type: 'function',
+  function: {
+    name: ASK_NAPKIN_TOOL,
+    description:
+      'Ask the user a multiple-choice clarifying question when their request is ambiguous and you ' +
+      'need them to pick a direction before continuing. The choices appear as buttons in the ' +
+      'Napkin panel; the loop pauses until the user selects one, then returns their choice to you. ' +
+      'Prefer this over guessing when a decision materially changes what you do next.',
+    parameters: {
+      type: 'object',
+      properties: {
+        title: { type: 'string', description: 'Short heading for the prompt.' },
+        prompt: { type: 'string', description: 'The question to ask the user.' },
+        choices: {
+          type: 'array',
+          description: 'The options to offer. Provide 2-6 concise choices.',
+          items: {
+            type: 'object',
+            properties: {
+              id: {
+                type: 'string',
+                description: 'Stable id returned when chosen. Defaults to the label.'
+              },
+              label: { type: 'string', description: 'The option text shown on the button.' }
+            },
+            required: ['label']
+          }
+        }
+      },
+      required: ['prompt', 'choices']
+    }
+  }
+}
+
 // Bounded tool-calling loop. Each user turn:
 //   1. ask lemond for a completion with the current MCP tool catalogue;
 //   2. if it returns tool_calls, execute each via the MCP manager, append the
@@ -113,11 +218,17 @@ export class Agent {
     emit: (event: AgentEvent) => void,
     approve: ApproveFn,
     signal?: AbortSignal,
-    onLimit?: ContinueFn
+    onLimit?: ContinueFn,
+    askNapkin?: AskNapkinFn
   ): Promise<void> {
     const messages = history as ChatCompletionMessageParam[]
-    // Expose the MCP tools plus the built-in planning tool for this turn.
-    const tools = [...this.mcp.getOpenAiTools(), PLAN_TOOL_DEF]
+    // Expose the MCP tools plus the built-in planning + napkin tools for this turn.
+    const tools = [
+      ...this.mcp.getOpenAiTools(),
+      PLAN_TOOL_DEF,
+      SHOW_NAPKIN_TOOL_DEF,
+      ASK_NAPKIN_TOOL_DEF
+    ]
 
     // Prime the model to actually call tools rather than describe them. Only
     // inject if the caller hasn't already supplied a system message.
@@ -216,7 +327,7 @@ export class Agent {
         }
 
         const realCalls = toolCalls.filter(
-          (c) => c.type === 'function' && c.function.name !== PLAN_TOOL
+          (c) => c.type === 'function' && !BUILTIN_TOOLS.has(c.function.name)
         )
         const wantsRealWork = realCalls.length > 0
 
@@ -252,7 +363,7 @@ export class Agent {
           } else {
             didRealWork = true
           }
-          const planned = await this.executeCall(call, messages, emit, approve)
+          const planned = await this.executeCall(call, messages, emit, approve, askNapkin)
           // Track the latest plan so a premature stop can be detected against it.
           if (planned) currentPlan = planned
         }
@@ -467,11 +578,69 @@ export class Agent {
     return steps
   }
 
+  /**
+   * Coerce the model's `show_napkin` arguments into a clean Napkin, or null when
+   * the payload is unusable (missing content or an unknown kind). Tolerant of a
+   * weak model: trims fields and defaults the title.
+   */
+  private normalizeNapkin(args: Record<string, unknown>): Napkin | null {
+    const kinds: Napkin['kind'][] = ['code', 'markdown', 'mermaid', 'svg', 'image']
+    const kind = kinds.find((k) => k === args.kind)
+    const content = typeof args.content === 'string' ? args.content : ''
+    if (!kind || !content.trim()) return null
+    const title =
+      typeof args.title === 'string' && args.title.trim() ? args.title.trim() : 'Napkin'
+    const napkin: Napkin = { title, kind, content }
+    if (typeof args.language === 'string' && args.language.trim())
+      napkin.language = args.language.trim()
+    if (typeof args.mimeType === 'string' && args.mimeType.trim())
+      napkin.mimeType = args.mimeType.trim()
+    if (typeof args.alt === 'string' && args.alt.trim()) napkin.alt = args.alt.trim()
+    return napkin
+  }
+
+  /**
+   * Coerce the model's `ask_napkin` arguments into a prompt plus a de-duplicated
+   * list of at most six choices. Accepts either `{id?, label}` objects or bare
+   * strings, defaults an id to its label, and drops empty/duplicate options.
+   */
+  private normalizeAsk(args: Record<string, unknown>): {
+    title: string
+    prompt: string
+    choices: NapkinChoice[]
+  } {
+    const prompt = typeof args.prompt === 'string' ? args.prompt.trim() : ''
+    const title =
+      typeof args.title === 'string' && args.title.trim() ? args.title.trim() : 'Quick question'
+    const raw = Array.isArray(args.choices) ? args.choices : []
+    const choices: NapkinChoice[] = []
+    const seen = new Set<string>()
+    for (const item of raw) {
+      let label = ''
+      let id = ''
+      if (typeof item === 'string') {
+        label = item.trim()
+      } else if (item && typeof item === 'object') {
+        const rec = item as Record<string, unknown>
+        label = typeof rec.label === 'string' ? rec.label.trim() : ''
+        id = typeof rec.id === 'string' ? rec.id.trim() : ''
+      }
+      if (!label) continue
+      if (!id) id = label
+      if (seen.has(id)) continue
+      seen.add(id)
+      choices.push({ id, label })
+      if (choices.length >= 6) break
+    }
+    return { title, prompt, choices }
+  }
+
   private async executeCall(
     call: ChatCompletionMessageToolCall,
     messages: ChatCompletionMessageParam[],
     emit: (event: AgentEvent) => void,
-    approve: ApproveFn
+    approve: ApproveFn,
+    askNapkin?: AskNapkinFn
   ): Promise<PlanStep[] | undefined> {
     if (call.type !== 'function') return
     const qualified = call.function.name
@@ -498,6 +667,54 @@ export class Agent {
             : 'Plan cleared.'
       })
       return steps
+    }
+
+    // `show_napkin`: display a rich artifact in the side panel. Handled in
+    // process (no MCP server, no approval); the model gets a short ack so it
+    // keeps replying in text alongside the visual.
+    if (qualified === SHOW_NAPKIN_TOOL) {
+      const napkin = this.normalizeNapkin(args)
+      if (napkin) {
+        emit({ type: 'napkin_show', napkin })
+        messages.push({
+          role: 'tool',
+          tool_call_id: call.id,
+          content: `Displayed "${napkin.title}" (${napkin.kind}) on the napkin panel for the user.`
+        })
+      } else {
+        messages.push({
+          role: 'tool',
+          tool_call_id: call.id,
+          content:
+            'Napkin not shown: provide non-empty content and a valid kind ' +
+            '(code, markdown, mermaid, svg, image).'
+        })
+      }
+      return
+    }
+
+    // `ask_napkin`: block on a multiple-choice clarification. Without an
+    // interactive handler (non-interactive caller), tell the model to ask in
+    // text instead of hanging.
+    if (qualified === ASK_NAPKIN_TOOL) {
+      const { title, prompt, choices } = this.normalizeAsk(args)
+      if (!askNapkin || choices.length === 0) {
+        messages.push({
+          role: 'tool',
+          tool_call_id: call.id,
+          content:
+            'Could not present a choice prompt; ask the user directly in your text reply instead.'
+        })
+        return
+      }
+      const chosen = await askNapkin({ title, prompt, choices })
+      const picked = choices.find((c) => c.id === chosen)
+      messages.push({
+        role: 'tool',
+        tool_call_id: call.id,
+        content: `The user selected: ${picked ? picked.label : chosen}. Continue based on this choice.`
+      })
+      return
     }
 
     const [serverId, ...rest] = qualified.split('__')

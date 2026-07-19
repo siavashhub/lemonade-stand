@@ -32,6 +32,37 @@ export interface AgentTool {
   description: string
 }
 
+/** The kind of content a Napkin panel renders. Raw HTML / live browsing is
+ * intentionally excluded: the model emits declarative content the renderer
+ * knows how to display safely (sanitized before it ever hits the DOM). */
+export type NapkinKind = 'code' | 'markdown' | 'mermaid' | 'svg' | 'image'
+
+/** A rich artifact the agent asks the app to show in the side "Napkin" panel,
+ * to enrich a reply beyond plain chat text. Created via the built-in
+ * `show_napkin` tool; the loop intercepts the call and surfaces it to the UI. */
+export interface Napkin {
+  /** Short heading shown at the top of the panel. */
+  title: string
+  kind: NapkinKind
+  /** The payload: source text for code/markdown/mermaid/svg, or base64-encoded
+   * bytes (no `data:` prefix) for an image. */
+  content: string
+  /** Language hint for `kind:'code'` display, e.g. 'ts', 'python'. */
+  language?: string
+  /** MIME type for `kind:'image'`, e.g. 'image/png'. Defaults to image/png. */
+  mimeType?: string
+  /** Descriptive alt text for `kind:'image'`. */
+  alt?: string
+}
+
+/** One selectable option in an `ask_napkin` clarification prompt. */
+export interface NapkinChoice {
+  /** Stable id returned to the model when chosen. Defaults to the label. */
+  id: string
+  /** Human-readable option text shown on the button. */
+  label: string
+}
+
 /** One entry in config/servers.json. */
 export type McpServerConfig =
   | {
@@ -210,6 +241,7 @@ export type TranscriptEntry =
   | { kind: 'assistant'; text: string }
   | { kind: 'tool'; label: string; detail: string; ok?: boolean }
   | { kind: 'plan'; steps: PlanStep[] }
+  | { kind: 'napkin'; napkin: Napkin }
   | { kind: 'warning'; text: string }
   | { kind: 'error'; text: string }
 
@@ -246,6 +278,13 @@ export type AgentEvent =
   // The model created or revised its working plan via the built-in `update_plan`
   // tool. `steps` is the full, current checklist the renderer should display.
   | { type: 'plan_updated'; steps: PlanStep[] }
+  // The agent asked to display a rich artifact in the side Napkin panel via the
+  // built-in `show_napkin` tool (code, markdown, a diagram, an SVG, or image).
+  | { type: 'napkin_show'; napkin: Napkin }
+  // The agent needs the user to pick among choices to clarify the request (the
+  // built-in `ask_napkin` tool). Main is blocked awaiting the user's selection;
+  // the renderer must call respondNapkinChoice(id, choiceId) to unblock it.
+  | { type: 'napkin_choice_request'; id: string; title: string; prompt: string; choices: NapkinChoice[] }
   // Live per-category context usage for the in-flight turn, so the usage badge
   // reflects the real prompt size (including tool calls/results) while the agent
   // works , not just the committed chat history.
@@ -288,9 +327,17 @@ export interface RendererApi {
   onAgentEvent(handler: (event: AgentEvent) => void): () => void
   /** Answer a pending `tool_approval_request`. */
   respondApproval(id: string, decision: ApprovalDecision): void
+  /** Turn the session-scoped approval bypass on or off. While on, tool calls
+   * are approved without prompting. Scoped to the current conversation: the
+   * renderer resets it to false whenever a new session starts, so it never
+   * outlives the session and a fresh session falls back to the default
+   * (env/settings.json) approval behavior. */
+  setBypassApprovals(enabled: boolean): void
   /** Answer a pending `step_limit_request`: true to let the agent keep going
    * for another budget, false to stop it. */
   respondStepLimit(id: string, cont: boolean): void
+  /** Answer a pending `napkin_choice_request` with the chosen option id. */
+  respondNapkinChoice(id: string, choiceId: string): void
   /** Toggle spoken replies (TTS). Returns the effective state. */
   setSpeak(enabled: boolean): Promise<boolean>
   /** Current spoken-reply state, seeded from config at startup. */

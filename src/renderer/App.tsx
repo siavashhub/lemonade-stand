@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { JSX } from 'react'
 import type {
   AgentEvent,
@@ -11,6 +11,8 @@ import type {
   DownloadJob,
   McpServerState,
   ModelInfo,
+  Napkin,
+  NapkinChoice,
   PlanStep,
   SessionSummary,
   TranscriptEntry
@@ -21,12 +23,16 @@ import {
   ClockIcon,
   CpuChipIcon,
   MicrophoneIcon,
+  ShieldCheckIcon,
+  ShieldSlashIcon,
   SpeakerWaveIcon,
   SpeakerXMarkIcon,
   StopIcon,
   StopSpeakingIcon,
   TrashIcon
 } from './icons'
+import { marked } from 'marked'
+import DOMPurify from 'dompurify'
 
 // A "trace" line rendered in the transcript. Chat turns and tool activity share
 // the same visual stream so you can watch the agent think. Aliased to the shared
@@ -207,6 +213,10 @@ export function App(): JSX.Element {
   // True while a synthesized reply is actively playing, so the UI can offer a
   // stop control (spoken replies are otherwise unstoppable once started).
   const [speaking, setSpeaking] = useState(false)
+  // Session-scoped approval bypass. While on, tool calls run without prompting
+  // for the current conversation only; starting a new session resets it so the
+  // default (env/settings.json) approval behavior applies again.
+  const [bypassApprovals, setBypassApprovals] = useState(false)
   const [recording, setRecording] = useState(false)
   const [transcribing, setTranscribing] = useState(false)
   const [approvals, setApprovals] = useState<PendingApproval[]>([])
@@ -217,6 +227,17 @@ export function App(): JSX.Element {
   const [plan, setPlan] = useState<PlanStep[] | null>(null)
   // Whether the sticky plan bar is expanded to show the full checklist.
   const [planExpanded, setPlanExpanded] = useState(false)
+  // The artifact currently shown in the side Napkin panel (from show_napkin),
+  // or null when nothing is displayed.
+  const [napkin, setNapkin] = useState<Napkin | null>(null)
+  // A pending ask_napkin clarification the user must answer. The agent loop is
+  // blocked until the user picks an option; null when there's no open question.
+  const [napkinChoice, setNapkinChoice] = useState<{
+    id: string
+    title: string
+    prompt: string
+    choices: NapkinChoice[]
+  } | null>(null)
   const [serverStatus, setServerStatus] = useState<ServerStatus>('checking')
   const [connectionBusy, setConnectionBusy] = useState(false)
   const [connectionError, setConnectionError] = useState<string | null>(null)
@@ -359,6 +380,8 @@ export function App(): JSX.Element {
     setSessionId(crypto.randomUUID())
     setPlan(null)
     setPlanExpanded(false)
+    setNapkin(null)
+    setNapkinChoice(null)
   }
 
   // Load a saved conversation into the live view so the user can continue it.
@@ -381,6 +404,8 @@ export function App(): JSX.Element {
         setHistory(session.history)
         setPlan(null)
         setPlanExpanded(false)
+        setNapkin(null)
+        setNapkinChoice(null)
         closePanel()
       })
       .catch(() => {})
@@ -610,12 +635,41 @@ export function App(): JSX.Element {
     setStepLimit(null)
   }
 
+  // Answer a pending ask_napkin clarification: send the chosen option id back to
+  // the (blocked) agent loop and echo the choice into the transcript as if the
+  // user had typed it, so the decision is visible and saved.
+  function chooseNapkin(choiceId: string): void {
+    if (!napkinChoice) return
+    window.api.respondNapkinChoice(napkinChoice.id, choiceId)
+    const picked = napkinChoice.choices.find((c) => c.id === choiceId)
+    setEntries((e) => [...e, { kind: 'user', text: picked ? picked.label : choiceId }])
+    setNapkinChoice(null)
+  }
+
   async function toggleSpeak(): Promise<void> {
     const next = await window.api.setSpeak(!speak)
     setSpeak(next)
     // Turning spoken replies off should also silence anything mid-playback.
     if (!next) stopSpeaking()
   }
+
+  // Flip the session-scoped approval bypass. When on, the main process approves
+  // tool calls without prompting; the state is reset to off whenever a new
+  // session starts (see the effect keyed on sessionId).
+  function toggleBypassApprovals(): void {
+    const next = !bypassApprovals
+    setBypassApprovals(next)
+    window.api.setBypassApprovals(next)
+  }
+
+  // Lock the approval bypass to the session that enabled it: any time the live
+  // conversation changes (new session, opening/deleting one, clearing history),
+  // reset the bypass so a fresh session falls back to the default approval
+  // behavior configured via the env/settings.json file.
+  useEffect(() => {
+    setBypassApprovals(false)
+    window.api.setBypassApprovals(false)
+  }, [sessionId])
 
   // Halt the spoken reply currently playing (if any). Pausing fires the 'pause'
   // listener wired up in the audio handler, which clears the ref and state.
@@ -742,6 +796,21 @@ export function App(): JSX.Element {
         // above the composer; it stays visible and updates in place as the
         // model works through the steps.
         setPlan(event.steps)
+      } else if (event.type === 'napkin_show') {
+        // The agent put a rich artifact on the side Napkin panel. Open it and
+        // drop a reopenable chip into the transcript so it persists with the
+        // saved conversation.
+        setNapkin(event.napkin)
+        setEntries((e) => [...e, { kind: 'napkin', napkin: event.napkin }])
+      } else if (event.type === 'napkin_choice_request') {
+        // The agent needs the user to pick a direction. The panel renders the
+        // choices; the loop stays blocked until chooseNapkin() answers.
+        setNapkinChoice({
+          id: event.id,
+          title: event.title,
+          prompt: event.prompt,
+          choices: event.choices
+        })
       } else if (event.type === 'context_usage') {
         // Live in-flight prompt size (tool calls/results included) , keep the
         // usage badge honest while the agent works, not just between turns.
@@ -901,7 +970,9 @@ export function App(): JSX.Element {
         </div>
       </header>
 
-      <div className="transcript" ref={scrollRef}>
+      <div className="stage">
+        <div className="chat-col">
+          <div className="transcript" ref={scrollRef}>
         {entries.length === 0 && (
           <div className="empty">
             Ask something. Open the <strong><ArchiveBoxIcon /> Pantry</strong> to stock tools &amp; skills the
@@ -909,7 +980,7 @@ export function App(): JSX.Element {
           </div>
         )}
         {entries.map((entry, i) => (
-          <Line key={i} entry={entry} />
+          <Line key={i} entry={entry} onOpenNapkin={setNapkin} />
         ))}
 
         {(busy || transcribing) && (
@@ -1108,6 +1179,21 @@ export function App(): JSX.Element {
             <CpuChipIcon /> Models{context?.model ? ` (${context.model})` : ''}
           </button>
           <button
+            className={`bypass-toggle ${bypassApprovals ? 'on' : ''}`}
+            onClick={toggleBypassApprovals}
+            title={
+              bypassApprovals
+                ? 'Bypassing tool approvals for this session , click to require approvals again.\nResets when you start a new conversation.'
+                : 'Tool approvals enforced , click to bypass them for this session only.\nResets when you start a new conversation.'
+            }
+            aria-pressed={bypassApprovals}
+            aria-label={
+              bypassApprovals ? 'Approvals bypassed (this session)' : 'Approvals enforced'
+            }
+          >
+            {bypassApprovals ? <ShieldSlashIcon /> : <ShieldCheckIcon />}
+          </button>
+          <button
             className={`speak-toggle ${speaking ? 'stop-speaking' : speak ? 'on' : ''}`}
             onClick={() => (speaking ? stopSpeaking() : void toggleSpeak())}
             title={speaking ? 'Stop speaking' : speak ? 'Spoken replies on' : 'Spoken replies off'}
@@ -1117,6 +1203,17 @@ export function App(): JSX.Element {
           </button>
         </div>
       </footer>
+        </div>
+        {(napkin || napkinChoice) && (
+          <NapkinPanel
+            napkin={napkin}
+            choice={napkinChoice}
+            theme={theme}
+            onChoose={chooseNapkin}
+            onClose={() => setNapkin(null)}
+          />
+        )}
+      </div>
 
       {activePanel === 'pantry' && (
         <Pantry onClose={closePanel} onChanged={refreshTools} />
@@ -2001,12 +2098,36 @@ function PlanBar({
   )
 }
 
-function Line({ entry }: { entry: Entry }): JSX.Element {
+function Line({
+  entry,
+  onOpenNapkin
+}: {
+  entry: Entry
+  onOpenNapkin?: (napkin: Napkin) => void
+}): JSX.Element {
   if (entry.kind === 'tool') {
     return (
       <div className={`line tool ${entry.ok === false ? 'tool-err' : ''}`}>
         <span className="tool-label">{entry.label}</span>
         <span className="tool-detail">{entry.detail}</span>
+      </div>
+    )
+  }
+  if (entry.kind === 'napkin') {
+    const napkin = entry.napkin
+    return (
+      <div className="line napkin-chip-line">
+        <button
+          className="napkin-chip"
+          onClick={() => onOpenNapkin?.(napkin)}
+          title="Reopen on the napkin"
+        >
+          <span className="napkin-chip-icon" aria-hidden="true">
+            🧾
+          </span>
+          <span className="napkin-chip-title">{napkin.title}</span>
+          <span className="napkin-chip-kind">{napkin.kind}</span>
+        </button>
       </div>
     )
   }
@@ -2321,4 +2442,192 @@ function PantryCard({
       </div>
     </div>
   )
+}
+
+// --- The Napkin -------------------------------------------------------------
+// A side panel that enriches replies with rich artifacts (code the user can
+// copy, rendered Markdown, Mermaid diagrams, SVG, images) and multiple-choice
+// clarifying prompts. The model drives it via the built-in show_napkin /
+// ask_napkin tools. All model-authored markup is sanitized before it touches
+// the DOM; raw HTML and live browsing are intentionally not supported.
+
+function NapkinPanel({
+  napkin,
+  choice,
+  theme,
+  onChoose,
+  onClose
+}: {
+  napkin: Napkin | null
+  choice: { id: string; title: string; prompt: string; choices: NapkinChoice[] } | null
+  theme: Theme
+  onChoose: (choiceId: string) => void
+  onClose: () => void
+}): JSX.Element {
+  const [copied, setCopied] = useState(false)
+  // Only text-based artifacts have a copyable source; images don't.
+  const canCopy = napkin !== null && napkin.kind !== 'image'
+
+  async function copySource(): Promise<void> {
+    if (!napkin) return
+    try {
+      await navigator.clipboard.writeText(napkin.content)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    } catch {
+      // Clipboard access denied; leave the button state unchanged.
+    }
+  }
+
+  return (
+    <aside className="napkin-panel">
+      <header className="napkin-head">
+        <div className="napkin-head-titles">
+          <span className="napkin-brand">🧾 Napkin</span>
+          {napkin && <span className="napkin-title">{napkin.title}</span>}
+        </div>
+        <div className="napkin-head-actions">
+          {canCopy && (
+            <button
+              className="napkin-copy"
+              onClick={() => void copySource()}
+              title="Copy the source"
+            >
+              {copied ? 'Copied ✓' : 'Copy'}
+            </button>
+          )}
+          <button
+            className="pantry-close"
+            onClick={onClose}
+            aria-label="Close napkin"
+            title="Close"
+          >
+            ✕
+          </button>
+        </div>
+      </header>
+      <div className="napkin-body">
+        {choice && <NapkinChoicePrompt choice={choice} onChoose={onChoose} />}
+        {napkin && <NapkinContent napkin={napkin} theme={theme} />}
+        {!choice && !napkin && <div className="napkin-empty">Nothing on the napkin.</div>}
+      </div>
+    </aside>
+  )
+}
+
+// The clarify prompt: renders the question and one button per option. Picking
+// one unblocks the waiting agent loop via onChoose.
+function NapkinChoicePrompt({
+  choice,
+  onChoose
+}: {
+  choice: { id: string; title: string; prompt: string; choices: NapkinChoice[] }
+  onChoose: (choiceId: string) => void
+}): JSX.Element {
+  return (
+    <div className="napkin-choice">
+      <div className="napkin-choice-title">{choice.title}</div>
+      <p className="napkin-choice-prompt">{choice.prompt}</p>
+      <div className="napkin-choice-options">
+        {choice.choices.map((c) => (
+          <button key={c.id} className="napkin-choice-btn" onClick={() => onChoose(c.id)}>
+            {c.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+// Dispatches to the right renderer for the artifact's kind.
+function NapkinContent({ napkin, theme }: { napkin: Napkin; theme: Theme }): JSX.Element {
+  if (napkin.kind === 'code') return <CodeNapkin napkin={napkin} />
+  if (napkin.kind === 'image') return <ImageNapkin napkin={napkin} />
+  if (napkin.kind === 'mermaid') return <MermaidNapkin napkin={napkin} theme={theme} />
+  if (napkin.kind === 'svg') return <SvgNapkin napkin={napkin} />
+  return <MarkdownNapkin napkin={napkin} />
+}
+
+function CodeNapkin({ napkin }: { napkin: Napkin }): JSX.Element {
+  return (
+    <pre className="napkin-code">
+      <code data-lang={napkin.language ?? 'text'}>{napkin.content}</code>
+    </pre>
+  )
+}
+
+// Markdown is parsed to HTML and then sanitized, since it comes from the model.
+function MarkdownNapkin({ napkin }: { napkin: Napkin }): JSX.Element {
+  const html = useMemo(
+    () => DOMPurify.sanitize(marked.parse(napkin.content) as string),
+    [napkin.content]
+  )
+  return <div className="napkin-md" dangerouslySetInnerHTML={{ __html: html }} />
+}
+
+// Raw SVG is sanitized with DOMPurify's SVG profile before it's injected, so
+// scripts/foreignObject/event handlers in model output can't execute.
+function SvgNapkin({ napkin }: { napkin: Napkin }): JSX.Element {
+  const html = useMemo(
+    () => DOMPurify.sanitize(napkin.content, { USE_PROFILES: { svg: true, svgFilters: true } }),
+    [napkin.content]
+  )
+  return <div className="napkin-svg" dangerouslySetInnerHTML={{ __html: html }} />
+}
+
+function ImageNapkin({ napkin }: { napkin: Napkin }): JSX.Element {
+  const mime =
+    napkin.mimeType && /^image\/[a-z0-9.+-]+$/i.test(napkin.mimeType)
+      ? napkin.mimeType
+      : 'image/png'
+  const src = `data:${mime};base64,${napkin.content.replace(/\s+/g, '')}`
+  return (
+    <div className="napkin-img-wrap">
+      <img className="napkin-img" src={src} alt={napkin.alt ?? napkin.title} />
+    </div>
+  )
+}
+
+// Mermaid is loaded lazily (it's heavy) and rendered to a sanitized SVG string
+// using the strict security level, so diagram source can't inject scripts.
+function MermaidNapkin({ napkin, theme }: { napkin: Napkin; theme: Theme }): JSX.Element {
+  const [svg, setSvg] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    setSvg(null)
+    setError(null)
+    void (async () => {
+      try {
+        const mermaid = (await import('mermaid')).default
+        mermaid.initialize({
+          startOnLoad: false,
+          securityLevel: 'strict',
+          theme: theme === 'dark' ? 'dark' : 'default'
+        })
+        const id = `napkin-mermaid-${Math.random().toString(36).slice(2)}`
+        const rendered = await mermaid.render(id, napkin.content)
+        if (!cancelled) setSvg(rendered.svg)
+      } catch (err) {
+        if (!cancelled) setError(err instanceof Error ? err.message : String(err))
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [napkin.content, theme])
+
+  if (error) {
+    return (
+      <div className="napkin-mermaid-err">
+        <p>Couldn&apos;t render the diagram: {error}</p>
+        <pre className="napkin-code">
+          <code>{napkin.content}</code>
+        </pre>
+      </div>
+    )
+  }
+  if (!svg) return <div className="napkin-empty">Rendering diagram…</div>
+  return <div className="napkin-mermaid" dangerouslySetInnerHTML={{ __html: svg }} />
 }

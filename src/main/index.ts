@@ -17,7 +17,7 @@ import {
 } from './config'
 import { LemonadeClient } from './lemonade/client'
 import { McpManager } from './mcp/manager'
-import { Agent, type ApproveFn, type ContinueFn } from './agent/loop'
+import { Agent, type ApproveFn, type AskNapkinFn, type ContinueFn } from './agent/loop'
 import { initFileLogging } from './logger'
 import {
   clearSessions,
@@ -88,6 +88,12 @@ debugLog(
 // name). Cleared on restart so a persistent grant never outlives the process.
 const sessionAllow = new Set<string>()
 
+// Session-scoped "bypass approvals" override. When on, tool calls are approved
+// without prompting regardless of config.requireApproval. The renderer turns it
+// on/off from the status bar and resets it to false whenever a new conversation
+// starts, so a bypass never carries over into a fresh session.
+let bypassApprovals = false
+
 // In-flight approval prompts: id -> resolver. The agent loop awaits these;
 // the renderer resolves them via the 'agent:approve' channel.
 const pendingApprovals = new Map<string, (decision: ApprovalDecision) => void>()
@@ -96,6 +102,12 @@ const pendingApprovals = new Map<string, (decision: ApprovalDecision) => void>()
 // step budget it asks the renderer whether to keep going; the reply arrives on
 // the 'agent:continue' channel.
 const pendingLimits = new Map<string, (cont: boolean) => void>()
+
+// In-flight napkin choice prompts: id -> resolver. When the agent asks a
+// multiple-choice clarifying question (ask_napkin), it blocks until the user
+// picks an option in the Napkin panel; the reply arrives on the
+// 'agent:napkin-choice' channel.
+const pendingNapkinChoices = new Map<string, (choiceId: string) => void>()
 
 // Abort handles for work the user can halt mid-flight. The renderer's stop
 // button signals these via the 'agent:cancel' / 'agent:cancel-transcribe'
@@ -391,6 +403,13 @@ ipcMain.on('agent:approve', (_event, id: string, decision: ApprovalDecision) => 
   }
 })
 
+// Toggle the session-scoped approval bypass. The renderer sets it true when the
+// user turns on "bypass approvals" and false when a new conversation starts, so
+// the override never outlives the session that enabled it.
+ipcMain.on('agent:set-bypass', (_event, enabled: boolean) => {
+  bypassApprovals = enabled
+})
+
 // Renderer's answer to a step_limit_request: true to grant another step budget,
 // false to stop. Resolving the stored promise unblocks the agent loop.
 ipcMain.on('agent:continue', (_event, id: string, cont: boolean) => {
@@ -398,6 +417,16 @@ ipcMain.on('agent:continue', (_event, id: string, cont: boolean) => {
   if (resolve) {
     pendingLimits.delete(id)
     resolve(cont)
+  }
+})
+
+// Renderer's answer to a napkin_choice_request: the id of the option the user
+// picked. Resolving the stored promise unblocks the agent loop.
+ipcMain.on('agent:napkin-choice', (_event, id: string, choiceId: string) => {
+  const resolve = pendingNapkinChoices.get(id)
+  if (resolve) {
+    pendingNapkinChoices.delete(id)
+    resolve(choiceId)
   }
 })
 
@@ -415,6 +444,10 @@ function describeEvent(e: AgentEvent): string {
         .map((s) => `${s.status[0]}:${s.title}`)
         .join(' | ')
         .slice(0, 300)}]`
+    case 'napkin_show':
+      return `napkin_show kind=${e.napkin.kind} title=${e.napkin.title} len=${e.napkin.content.length}`
+    case 'napkin_choice_request':
+      return `napkin_choice_request choices=${e.choices.length} prompt=${e.prompt.slice(0, 80)}`
     case 'assistant_text':
       return `assistant_text len=${e.text.trim().length}`
     case 'tool_approval_request':
@@ -470,10 +503,12 @@ ipcMain.handle('agent:send', async (event, messages: ChatMessage[]) => {
     }
   }
 
-  // Approve callback: auto-allow when approval is disabled or the tool was
-  // already "always allowed"; otherwise prompt the renderer and await a reply.
+  // Approve callback: auto-allow when approval is disabled, the session is
+  // bypassing approvals, or the tool was already "always allowed"; otherwise
+  // prompt the renderer and await a reply.
   const approve: ApproveFn = ({ server, tool, qualified, args }) => {
-    if (!config.requireApproval || sessionAllow.has(qualified)) return Promise.resolve(true)
+    if (!config.requireApproval || bypassApprovals || sessionAllow.has(qualified))
+      return Promise.resolve(true)
     const id = randomUUID()
     send({ type: 'tool_approval_request', id, server, tool, args })
     return new Promise<boolean>((resolve) => {
@@ -498,10 +533,20 @@ ipcMain.handle('agent:send', async (event, messages: ChatMessage[]) => {
     })
   }
 
+  // Napkin-choice callback: prompt the renderer with a multiple-choice question
+  // (rendered in the Napkin panel) and await the id of the option the user picks.
+  const askNapkin: AskNapkinFn = ({ title, prompt, choices }) => {
+    const id = randomUUID()
+    send({ type: 'napkin_choice_request', id, title, prompt, choices })
+    return new Promise<string>((resolve) => {
+      pendingNapkinChoices.set(id, resolve)
+    })
+  }
+
   const abort = new AbortController()
   currentAgentAbort = abort
   try {
-    await agent.run(messages, emit, approve, abort.signal, onLimit)
+    await agent.run(messages, emit, approve, abort.signal, onLimit, askNapkin)
   } finally {
     if (currentAgentAbort === abort) currentAgentAbort = null
   }

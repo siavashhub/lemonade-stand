@@ -40,8 +40,16 @@ const api: RendererApi = {
     ipcRenderer.send('agent:approve', id, decision)
   },
 
+  setBypassApprovals(enabled: boolean): void {
+    ipcRenderer.send('agent:set-bypass', enabled)
+  },
+
   respondStepLimit(id: string, cont: boolean): void {
     ipcRenderer.send('agent:continue', id, cont)
+  },
+
+  respondNapkinChoice(id: string, choiceId: string): void {
+    ipcRenderer.send('agent:napkin-choice', id, choiceId)
   },
 
   setSpeak(enabled: boolean): Promise<boolean> {

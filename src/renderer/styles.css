@@ -633,6 +633,27 @@ body {
   }
 }
 
+.bypass-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 5px 8px;
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+}
+
+/* When bypassing approvals, warn with the danger colour so the relaxed guard
+   is obvious at a glance. */
+.bypass-toggle.on {
+  border-color: var(--danger, #d9534f);
+  color: var(--danger, #d9534f);
+}
+
 .pantry-toggle {
   display: inline-flex;
   align-items: center;
@@ -732,6 +753,12 @@ body {
 /* The footer speaker toggle is smaller than the top-bar variant to sit neatly
    inline with the text-sized status controls around it. */
 .statusbar-right .speak-toggle {
+  font-size: 14px;
+  padding: 3px 7px;
+}
+
+/* Match the footer approval-bypass toggle to the speaker toggle's footer size. */
+.statusbar-right .bypass-toggle {
   font-size: 14px;
   padding: 3px 7px;
 }
@@ -2037,3 +2064,301 @@ button.server-status:hover {
   color: #e05a5a;
   background: var(--panel);
 }
+
+/* --- The Napkin (rich artifact side panel) -------------------------------- */
+
+/* The chat column and the napkin dock sit side by side below the top bar. */
+.stage {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.chat-col {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+.napkin-panel {
+  width: min(480px, 46vw);
+  min-width: 300px;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  border-left: 1px solid var(--border);
+  box-shadow: -12px 0 40px -24px rgba(0, 0, 0, 0.5);
+  animation: napkin-in 0.18s ease-out;
+}
+
+@keyframes napkin-in {
+  from {
+    transform: translateX(20px);
+    opacity: 0.3;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+.napkin-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.napkin-head-titles {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
+
+.napkin-brand {
+  font-weight: 600;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.napkin-title {
+  color: var(--muted);
+  font-size: 12.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.napkin-head-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.napkin-copy {
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.napkin-copy:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.napkin-body {
+  flex: 1;
+  overflow: auto;
+  padding: 14px;
+}
+
+.napkin-empty {
+  color: var(--muted);
+  font-size: 13px;
+  text-align: center;
+  margin-top: 24px;
+}
+
+/* Code artifact */
+.napkin-code {
+  margin: 0;
+  padding: 12px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: auto;
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.napkin-code code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  white-space: pre;
+}
+
+/* Rendered Markdown */
+.napkin-md {
+  font-size: 14px;
+  line-height: 1.6;
+  word-wrap: break-word;
+}
+
+.napkin-md :first-child {
+  margin-top: 0;
+}
+
+.napkin-md :last-child {
+  margin-bottom: 0;
+}
+
+.napkin-md h1,
+.napkin-md h2,
+.napkin-md h3 {
+  line-height: 1.3;
+}
+
+.napkin-md pre {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px;
+  overflow: auto;
+}
+
+.napkin-md code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.9em;
+}
+
+.napkin-md :not(pre) > code {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+
+.napkin-md a {
+  color: var(--accent);
+}
+
+.napkin-md table {
+  border-collapse: collapse;
+  width: 100%;
+}
+
+.napkin-md th,
+.napkin-md td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+}
+
+.napkin-md blockquote {
+  margin: 8px 0;
+  padding-left: 12px;
+  border-left: 3px solid var(--border);
+  color: var(--muted);
+}
+
+/* SVG / Mermaid / image artifacts */
+.napkin-svg,
+.napkin-mermaid,
+.napkin-img-wrap {
+  display: flex;
+  justify-content: center;
+}
+
+.napkin-svg svg,
+.napkin-mermaid svg {
+  max-width: 100%;
+  height: auto;
+}
+
+.napkin-img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+}
+
+.napkin-mermaid-err {
+  color: #e05a5a;
+  font-size: 13px;
+}
+
+.napkin-mermaid-err p {
+  margin: 0 0 8px;
+}
+
+/* Multiple-choice clarify prompt */
+.napkin-choice {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 14px;
+  background: var(--bg);
+  margin-bottom: 14px;
+}
+
+.napkin-choice-title {
+  font-weight: 600;
+  font-size: 13px;
+  margin-bottom: 6px;
+}
+
+.napkin-choice-prompt {
+  margin: 0 0 12px;
+  font-size: 13.5px;
+  line-height: 1.5;
+  color: var(--text);
+}
+
+.napkin-choice-options {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.napkin-choice-btn {
+  text-align: left;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.napkin-choice-btn:hover {
+  border-color: var(--accent);
+  background: rgba(245, 197, 66, 0.1);
+}
+
+/* Transcript chip that reopens a shown napkin */
+.napkin-chip-line {
+  max-width: 80%;
+}
+
+.napkin-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+  border-radius: 999px;
+  padding: 6px 12px;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.napkin-chip:hover {
+  border-color: var(--accent);
+}
+
+.napkin-chip-kind {
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+/* On narrow windows the napkin takes a smaller slice. */
+@media (max-width: 720px) {
+  .napkin-panel {
+    width: min(360px, 70vw);
+    min-width: 0;
+  }
+}
+
