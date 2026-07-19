@@ -361,6 +361,18 @@ ipcMain.handle('agent:load-model', async (_event, id: string, ctxSize?: number) 
   return lemonade.listModels()
 })
 
+// Start a server-owned background download of a model. Returns the initial job
+// snapshot; the renderer polls agent:list-downloads for live progress.
+ipcMain.handle('agent:download-model', (_event, id: string) => lemonade.startDownload(id))
+
+// Current model download jobs, for the live progress indicators.
+ipcMain.handle('agent:list-downloads', () => lemonade.listDownloads())
+
+// Pause, cancel, or remove a model download job.
+ipcMain.handle('agent:control-download', (_event, id: string, action: 'pause' | 'cancel' | 'remove') =>
+  lemonade.controlDownload(id, action)
+)
+
 // Renderer's answer to a tool_approval_request. Resolving the stored promise
 // unblocks the agent loop.
 ipcMain.on('agent:approve', (_event, id: string, decision: ApprovalDecision) => {

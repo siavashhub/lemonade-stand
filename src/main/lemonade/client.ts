@@ -3,7 +3,7 @@ import type {
   ChatCompletionMessageParam,
   ChatCompletionTool
 } from 'openai/resources/chat/completions'
-import type { ContextBreakdown, ContextInfo, ModelInfo } from '@shared/types'
+import type { ContextBreakdown, ContextInfo, DownloadJob, ModelInfo } from '@shared/types'
 // Fallback context window used only when no override is configured and the
 // server can't be reached to report the loaded model's runtime context.
 const DEFAULT_CONTEXT_SIZE = 4096
@@ -40,6 +40,25 @@ interface HealthModel {
 interface HealthResponse {
   model_loaded?: string
   all_models_loaded?: HealthModel[]
+}
+
+// Shape (subset) of a Lemonade /downloads job snapshot. Byte totals come under
+// several aliases depending on server version; we read the most complete one.
+interface DownloadEntry {
+  id?: string
+  model_name?: string
+  status?: string
+  running?: boolean
+  file_index?: number
+  total_files?: number
+  bytes_total?: number
+  total_download_size?: number
+  cumulative_bytes_downloaded?: number
+  overall_bytes_downloaded?: number
+  bytes_downloaded?: number
+  percent?: number
+  complete?: boolean
+  error?: string
 }
 
 // Result of comparing an outgoing request against the model's context budget.
@@ -390,6 +409,96 @@ export class LemonadeClient {
       return { ok: true }
     } catch (err) {
       return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+
+  /** Normalize a raw /downloads job snapshot into the renderer's DownloadJob. */
+  private mapDownload(e: DownloadEntry): DownloadJob {
+    const status = (e.status ?? 'downloading') as DownloadJob['status']
+    return {
+      id: e.id ?? (e.model_name ? `model:${e.model_name}` : ''),
+      modelName: e.model_name ?? '',
+      status: ['downloading', 'paused', 'cancelled', 'completed', 'error'].includes(status)
+        ? status
+        : 'downloading',
+      running: e.running ?? false,
+      percent: typeof e.percent === 'number' ? e.percent : 0,
+      // Prefer the whole-job cumulative total; fall back to the per-file count.
+      bytesDownloaded:
+        e.cumulative_bytes_downloaded ??
+        e.overall_bytes_downloaded ??
+        e.bytes_downloaded ??
+        0,
+      bytesTotal: e.total_download_size || e.bytes_total || 0,
+      fileIndex: e.file_index,
+      totalFiles: e.total_files,
+      complete: e.complete ?? false,
+      error: e.error
+    }
+  }
+
+  /**
+   * Kick off a *server-owned* background download of a model via /pull with
+   * `stream:true, subscribe:false`. The server starts the job and returns a
+   * snapshot immediately; the download then proceeds independently of this
+   * connection, so it survives a renderer reload. Poll {@link listDownloads} to
+   * track progress. Returns the initial job snapshot.
+   */
+  async startDownload(id: string): Promise<DownloadJob> {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), 30000)
+    try {
+      const response = await fetch(`${this.baseURL}/pull`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model_name: id, stream: true, subscribe: false }),
+        signal: controller.signal
+      })
+      if (!response.ok) {
+        const detail = await response.text().catch(() => '')
+        throw new Error(`Server returned ${response.status}: ${detail || 'download failed'}`)
+      }
+      const body = (await response.json()) as DownloadEntry
+      return this.mapDownload({ ...body, model_name: body.model_name ?? id })
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+
+  /** List the server's current model download jobs (for live progress). */
+  async listDownloads(): Promise<DownloadJob[]> {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), 5000)
+    try {
+      const response = await fetch(`${this.baseURL}/downloads`, {
+        method: 'GET',
+        signal: controller.signal
+      })
+      if (!response.ok) return []
+      const body = (await response.json()) as DownloadEntry[]
+      return (body ?? []).filter((e) => e.model_name).map((e) => this.mapDownload(e))
+    } catch {
+      return []
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+
+  /** Pause, cancel, or remove a server-owned model download job. */
+  async controlDownload(id: string, action: 'pause' | 'cancel' | 'remove'): Promise<void> {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), 10000)
+    try {
+      await fetch(`${this.baseURL}/downloads/control`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id, action }),
+        signal: controller.signal
+      })
+    } catch {
+      // Best-effort; the next poll reflects the real job state regardless.
     } finally {
       clearTimeout(timer)
     }

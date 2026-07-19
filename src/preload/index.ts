@@ -100,6 +100,18 @@ const api: RendererApi = {
     return ipcRenderer.invoke('agent:load-model', id, ctxSize)
   },
 
+  downloadModel(id: string) {
+    return ipcRenderer.invoke('agent:download-model', id)
+  },
+
+  listDownloads() {
+    return ipcRenderer.invoke('agent:list-downloads')
+  },
+
+  controlDownload(id: string, action: 'pause' | 'cancel' | 'remove') {
+    return ipcRenderer.invoke('agent:control-download', id, action)
+  },
+
   listCatalog() {
     return ipcRenderer.invoke('catalog:list')
   },

@@ -8,6 +8,7 @@ import type {
   ChatMessage,
   ContextBreakdown,
   ContextInfo,
+  DownloadJob,
   McpServerState,
   ModelInfo,
   PlanStep,
@@ -16,6 +17,7 @@ import type {
 } from '@shared/types'
 import {
   ArchiveBoxIcon,
+  ArrowDownTrayIcon,
   ClockIcon,
   CpuChipIcon,
   MicrophoneIcon,
@@ -1565,6 +1567,10 @@ function Models({
   const [loading, setLoading] = useState(true)
   const [busyId, setBusyId] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  // Live download jobs keyed by model id, refreshed by a poll while any are
+  // active so each card can show a progress bar, byte counts, and status.
+  const [downloads, setDownloads] = useState<Record<string, DownloadJob>>({})
+  const pollRef = useRef<number | null>(null)
 
   function refresh(): void {
     setLoading(true)
@@ -1576,6 +1582,60 @@ function Models({
   }
 
   useEffect(refresh, [])
+
+  // Poll the server's download jobs while any are running, so progress bars stay
+  // live. The interval stops itself once every job has settled (and completed
+  // ones are cleared from the server), keeping the panel idle when nothing is
+  // downloading. Any in-flight interval is torn down when the panel unmounts.
+  const stopPolling = (): void => {
+    if (pollRef.current != null) {
+      window.clearInterval(pollRef.current)
+      pollRef.current = null
+    }
+  }
+
+  const poll = async (): Promise<void> => {
+    let jobs: DownloadJob[]
+    try {
+      jobs = await window.api.listDownloads()
+    } catch {
+      return
+    }
+    const byId: Record<string, DownloadJob> = {}
+    for (const j of jobs) byId[j.modelName] = j
+    setDownloads(byId)
+
+    // A finished download flips the model to "downloaded"; refresh the list so
+    // its card offers Load, then clear the settled job from the server.
+    const finished = jobs.filter((j) => j.complete && j.status === 'completed')
+    if (finished.length > 0) {
+      refresh()
+      for (const j of finished) void window.api.controlDownload(j.id, 'remove').catch(() => {})
+    }
+
+    // Keep polling only while a job is still actively running.
+    if (!jobs.some((j) => j.running || j.status === 'downloading')) stopPolling()
+  }
+
+  const startPolling = (): void => {
+    if (pollRef.current != null) return
+    pollRef.current = window.setInterval(() => void poll(), 1000)
+  }
+
+  useEffect(() => {
+    // Adopt any downloads already running on the server (e.g. started before the
+    // panel was opened, or surviving a reload) and resume tracking them.
+    void (async () => {
+      const jobs = await window.api.listDownloads().catch(() => [] as DownloadJob[])
+      if (jobs.length === 0) return
+      const byId: Record<string, DownloadJob> = {}
+      for (const j of jobs) byId[j.modelName] = j
+      setDownloads(byId)
+      if (jobs.some((j) => j.running || j.status === 'downloading')) startPolling()
+    })()
+    return stopPolling
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   async function load(id: string): Promise<void> {
     setBusyId(id)
@@ -1589,6 +1649,27 @@ function Models({
     } finally {
       setBusyId(null)
     }
+  }
+
+  async function download(id: string): Promise<void> {
+    setError(null)
+    try {
+      const job = await window.api.downloadModel(id)
+      setDownloads((prev) => ({ ...prev, [job.modelName]: job }))
+      startPolling()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    }
+  }
+
+  async function cancelDownload(job: DownloadJob): Promise<void> {
+    await window.api.controlDownload(job.id, 'cancel').catch(() => {})
+    await window.api.controlDownload(job.id, 'remove').catch(() => {})
+    setDownloads((prev) => {
+      const next = { ...prev }
+      delete next[job.modelName]
+      return next
+    })
   }
 
   // Only chat models can drive the agent; surface those first and separately.
@@ -1610,7 +1691,7 @@ function Models({
           <div>
             <h2><CpuChipIcon /> Models</h2>
             <p className="pantry-sub">
-              Load a model on the server to run the agent · ★ = great for agentic use
+              Download or load a model to run the agent · ★ = great for agentic use
             </p>
           </div>
           <button className="pantry-close" onClick={onClose} aria-label="Close" title="Close">
@@ -1628,7 +1709,15 @@ function Models({
           {error && <div className="card-status err">{error}</div>}
 
           {rankedLlms.map((m) => (
-            <ModelCard key={m.id} model={m} busy={busyId === m.id} onLoad={() => void load(m.id)} />
+            <ModelCard
+              key={m.id}
+              model={m}
+              busy={busyId === m.id}
+              download={downloads[m.id]}
+              onLoad={() => void load(m.id)}
+              onDownload={() => void download(m.id)}
+              onCancelDownload={() => downloads[m.id] && void cancelDownload(downloads[m.id])}
+            />
           ))}
 
           {others.length > 0 && (
@@ -1639,7 +1728,10 @@ function Models({
                   key={m.id}
                   model={m}
                   busy={busyId === m.id}
+                  download={downloads[m.id]}
                   onLoad={() => void load(m.id)}
+                  onDownload={() => void download(m.id)}
+                  onCancelDownload={() => downloads[m.id] && void cancelDownload(downloads[m.id])}
                 />
               ))}
             </>
@@ -1657,15 +1749,26 @@ function Models({
 function ModelCard({
   model,
   busy,
-  onLoad
+  download,
+  onLoad,
+  onDownload,
+  onCancelDownload
 }: {
   model: ModelInfo
   busy: boolean
+  download?: DownloadJob
   onLoad: () => void
+  onDownload: () => void
+  onCancelDownload: () => void
 }): JSX.Element {
   const ctx = model.maxContextWindow
     ? `${(model.maxContextWindow / 1024).toFixed(0)}K ctx`
     : null
+  const size = model.sizeGb ? `${model.sizeGb.toFixed(2)} GB` : null
+  // A job is "in flight" until it either completes or errors out.
+  const downloading =
+    !!download && !download.complete && download.status !== 'cancelled' && download.status !== 'error'
+  const failed = download?.status === 'error'
   return (
     <div className={`pantry-card ${model.active ? 'is-on' : ''}`}>
       <div className="card-main">
@@ -1676,6 +1779,13 @@ function ModelCard({
             <span className="badge rec">★ Great for agents</span>
           )}
           {model.active && <span className="badge">Active</span>}
+          {/* Surface the download size up front for models not yet on disk, so
+              the user knows how much they're about to pull before clicking. */}
+          {!model.downloaded && !downloading && size && (
+            <span className="badge size" title="Download size">
+              ↓ {size}
+            </span>
+          )}
         </div>
         <p className="card-blurb">
           {model.omni
@@ -1687,13 +1797,52 @@ function ModelCard({
         <div className="card-status">
           {[
             ctx,
-            model.sizeGb ? `${model.sizeGb.toFixed(2)} GB` : null,
+            size,
             model.downloaded ? 'downloaded' : 'not downloaded',
             model.loaded ? '● loaded on server' : null
           ]
             .filter(Boolean)
             .join(' · ')}
         </div>
+        {downloading && (
+          <div className="dl-progress" role="status" aria-live="polite">
+            <div className="dl-bar">
+              <div
+                className={`dl-fill ${download!.status === 'paused' ? 'paused' : ''}`}
+                style={{ width: `${Math.max(2, Math.round(download!.percent))}%` }}
+              />
+            </div>
+            <div className="dl-meta">
+              <span>
+                {download!.status === 'paused' ? 'Paused' : 'Downloading'} ·{' '}
+                {Math.round(download!.percent)}%
+              </span>
+              <span>
+                {formatBytes(download!.bytesDownloaded)}
+                {download!.bytesTotal > 0 ? ` / ${formatBytes(download!.bytesTotal)}` : ''}
+                {download!.totalFiles && download!.totalFiles > 1
+                  ? ` · file ${download!.fileIndex ?? 1}/${download!.totalFiles}`
+                  : ''}
+              </span>
+            </div>
+          </div>
+        )}
+        {failed && (
+          <div className="card-status err">
+            Download failed{download?.error ? `: ${download.error}` : ''}
+          </div>
+        )}
+        {busy && (
+          <div className="dl-progress" role="status" aria-live="polite">
+            <div className="dl-bar indeterminate">
+              <div className="dl-fill" />
+            </div>
+            <div className="dl-meta">
+              <span>Loading model into memory…</span>
+              <span>This can take a moment</span>
+            </div>
+          </div>
+        )}
         {!model.agentReady && model.type === 'llm' && (
           <div className="card-status warn-note">
             No tool-calling label — may not reliably call tools in the agent loop.
@@ -1701,16 +1850,35 @@ function ModelCard({
         )}
       </div>
       <div className="card-actions">
-        <button
-          className={model.active ? 'btn-off' : 'btn-on'}
-          disabled={busy || model.active}
-          onClick={onLoad}
-        >
-          {busy ? 'Loading…' : model.active ? 'Active' : model.loaded ? 'Use' : 'Load'}
-        </button>
+        {downloading ? (
+          <button className="btn-off" onClick={onCancelDownload}>
+            Cancel
+          </button>
+        ) : !model.downloaded ? (
+          <button className="btn-on" disabled={busy} onClick={onDownload}>
+            <ArrowDownTrayIcon /> Download
+          </button>
+        ) : (
+          <button
+            className={model.active ? 'btn-off' : 'btn-on'}
+            disabled={busy || model.active}
+            onClick={onLoad}
+          >
+            {busy ? 'Loading…' : model.active ? 'Active' : model.loaded ? 'Use' : 'Load'}
+          </button>
+        )}
       </div>
     </div>
   )
+}
+
+// Human-readable byte size for download progress (e.g. "1.34 GB", "512 MB").
+function formatBytes(bytes: number): string {
+  if (!bytes || bytes < 0) return '0 B'
+  const units = ['B', 'KB', 'MB', 'GB', 'TB']
+  const i = Math.min(units.length - 1, Math.floor(Math.log(bytes) / Math.log(1024)))
+  const value = bytes / Math.pow(1024, i)
+  return `${value.toFixed(i >= 3 ? 2 : i >= 2 ? 1 : 0)} ${units[i]}`
 }
 
 // The sticky plan bar shown above the composer while the agent has an active

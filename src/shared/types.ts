@@ -154,6 +154,34 @@ export interface ModelInfo {
   active: boolean
 }
 
+/** Progress snapshot for a server-owned model download job, surfaced so the UI
+ * can show a live progress bar, byte counts, and status for a model being
+ * pulled. Mirrors (a subset of) the Lemonade server's /downloads job shape. */
+export interface DownloadJob {
+  /** Stable download id, e.g. `model:Qwen3-4B-GGUF`; used with the control API. */
+  id: string
+  /** The Lemonade model name this job downloads. */
+  modelName: string
+  /** Lifecycle state reported by the server. */
+  status: 'downloading' | 'paused' | 'cancelled' | 'completed' | 'error'
+  /** Whether the download worker is still active. */
+  running: boolean
+  /** Overall progress across all of the job's files (0–100). */
+  percent: number
+  /** Total bytes downloaded across the whole job so far. */
+  bytesDownloaded: number
+  /** Total expected bytes across all files, when known (0 until resolved). */
+  bytesTotal: number
+  /** 1-based index of the file currently downloading, when reported. */
+  fileIndex?: number
+  /** Number of files in the job, when reported. */
+  totalFiles?: number
+  /** True once every file has downloaded successfully. */
+  complete: boolean
+  /** Populated only for failed jobs. */
+  error?: string
+}
+
 /** Live state of a configured server, merged with catalog metadata in the UI. */
 export interface McpServerState {
   id: string
@@ -303,6 +331,13 @@ export interface RendererApi {
   /** Load a model on the server and make it the app's active chat model.
    * Returns the refreshed model list, or throws on failure. */
   loadModel(id: string): Promise<ModelInfo[]>
+  /** Start a background download of a model on the server (server-owned job
+   * that survives a renderer reload). Returns the job's initial snapshot. */
+  downloadModel(id: string): Promise<DownloadJob>
+  /** List in-flight/recent server-owned model download jobs, for progress. */
+  listDownloads(): Promise<DownloadJob[]>
+  /** Pause, cancel, or remove a server-owned model download job. */
+  controlDownload(id: string, action: 'pause' | 'cancel' | 'remove'): Promise<void>
   /** The Market catalogue of installable tools/skills. */
   listCatalog(): Promise<CatalogEntry[]>
   /** Current state of every configured server (enabled or not). */

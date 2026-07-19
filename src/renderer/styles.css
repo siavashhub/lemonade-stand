@@ -1666,6 +1666,63 @@ body {
   color: #f5c542;
 }
 
+/* Download-size badge on not-yet-downloaded models. */
+.badge.size {
+  border-color: var(--accent);
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Live download / model-loading progress inside a model card. */
+.dl-progress {
+  margin-top: 10px;
+}
+
+.dl-bar {
+  height: 6px;
+  border-radius: 999px;
+  background: var(--border);
+  overflow: hidden;
+}
+
+.dl-fill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 999px;
+  transition: width 0.3s ease;
+}
+
+.dl-fill.paused {
+  background: var(--muted);
+}
+
+/* Indeterminate variant used while a model is loading into memory: a sliver
+   sweeps across so the user can see the system is working, not stuck. */
+.dl-bar.indeterminate .dl-fill {
+  width: 35%;
+  transition: none;
+  animation: dl-sweep 1.2s ease-in-out infinite;
+}
+
+@keyframes dl-sweep {
+  0% {
+    margin-left: -35%;
+  }
+  100% {
+    margin-left: 100%;
+  }
+}
+
+.dl-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 5px;
+  font-size: 11px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
 .models-ctx {
   display: flex;
   align-items: center;
@@ -1726,6 +1783,10 @@ body {
   cursor: pointer;
   border: 1px solid var(--border);
   white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
 }
 
 .btn-on {
