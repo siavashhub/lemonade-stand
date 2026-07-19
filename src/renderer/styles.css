@@ -2342,6 +2342,23 @@ button.server-status:hover {
   opacity: 0.8;
 }
 
+.pitcher-search {
+  box-sizing: border-box;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 13px;
+  font-weight: 400;
+  font-family: inherit;
+}
+
+.pitcher-search:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
 .pitcher-tools {
   display: flex;
   flex-direction: column;

@@ -2002,6 +2002,7 @@ function PitcherEditor({
   onSave: (p: Pitcher) => void
 }): JSX.Element {
   const [draft, setDraft] = useState<Pitcher>(initial)
+  const [toolSearch, setToolSearch] = useState<string>('')
 
   const set = (patch: Partial<Pitcher>): void => setDraft((d) => ({ ...d, ...patch }))
 
@@ -2014,6 +2015,13 @@ function PitcherEditor({
     }))
 
   const canSave = draft.name.trim().length > 0 && draft.prompt.trim().length > 0
+
+  const filteredTools = useMemo(() => {
+    const query = toolSearch.toLowerCase()
+    return tools.filter((t) =>
+      `${t.serverId} ${t.toolName}`.toLowerCase().includes(query)
+    )
+  }, [tools, toolSearch])
 
   return (
     <div className="pitcher-editor">
@@ -2082,6 +2090,13 @@ function PitcherEditor({
             (auto-approved during a pour, everything else is blocked)
           </em>
         </span>
+        <input
+          type="text"
+          className="pitcher-search"
+          placeholder="Search tools..."
+          value={toolSearch}
+          onChange={(e) => setToolSearch(e.target.value)}
+        />
         <div className="pitcher-tools">
           {tools.length === 0 && (
             <div className="empty">
@@ -2089,7 +2104,10 @@ function PitcherEditor({
               write.
             </div>
           )}
-          {tools.map((t) => (
+          {filteredTools.length === 0 && tools.length > 0 && (
+            <div className="empty">No tools match your search.</div>
+          )}
+          {filteredTools.map((t) => (
             <label key={t.qualifiedName} className="pitcher-tool">
               <input
                 type="checkbox"
