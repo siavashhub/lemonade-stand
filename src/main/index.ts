@@ -1,7 +1,7 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, Notification, shell } from 'electron'
 import { randomUUID } from 'node:crypto'
 import { copyFileSync, existsSync, mkdirSync, readdirSync, statSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { dirname, isAbsolute, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type {
   AgentEvent,
@@ -435,14 +435,47 @@ ipcMain.on('agent:set-bypass', (_event, enabled: boolean) => {
   bypassApprovals = enabled
 })
 
+// Roots of every configured path-based stdio server (e.g. the Filesystem
+// server's allowed directory). Filesystem tools return paths relative to their
+// root, so a napkin's folderPath can be relative (e.g. "notes"); we resolve it
+// against these roots before opening.
+function configuredServerRoots(): string[] {
+  const catalog = loadCatalog(appPath)
+  const roots: string[] = []
+  for (const server of readServers(appPath)) {
+    const entry = catalog.find((c) => c.id === server.id)
+    const root = entry ? pathForServer(entry, server) : undefined
+    if (root && isAbsolute(root)) roots.push(root)
+  }
+  return roots
+}
+
+// Resolve a possibly-relative folder path to an absolute, existing location.
+// Absolute paths are used as-is; relative paths are tried against each
+// configured server root. Files resolve to their containing directory.
+function resolveExplorerTarget(rawPath: string): string {
+  const unquoted = rawPath.replace(/^['"]|['"]$/g, '')
+  const toDir = (p: string): string =>
+    existsSync(p) && statSync(p).isFile() ? dirname(p) : p
+
+  if (isAbsolute(unquoted)) return toDir(unquoted)
+
+  for (const root of configuredServerRoots()) {
+    const candidate = join(root, unquoted)
+    if (existsSync(candidate)) return toDir(candidate)
+  }
+  // Nothing matched; return the best guess so the error names a real path.
+  const roots = configuredServerRoots()
+  return roots.length > 0 ? join(roots[0], unquoted) : unquoted
+}
+
 ipcMain.handle('explorer:open-folder', async (_event, folderPath: string) => {
   try {
     const rawPath = String(folderPath ?? '').trim()
     if (!rawPath) throw new Error('No folder path provided')
 
-    // Tool output can include quoted paths; trim wrapping quotes first.
-    const unquoted = rawPath.replace(/^['\"]|['\"]$/g, '')
-    const target = existsSync(unquoted) && statSync(unquoted).isFile() ? dirname(unquoted) : unquoted
+    const target = resolveExplorerTarget(rawPath)
+    if (!existsSync(target)) throw new Error(`Path not found: ${target}`)
     const openError = await shell.openPath(target)
     if (openError) throw new Error(openError)
   } catch (err) {
