@@ -376,9 +376,19 @@ export class Agent {
           })
         }
 
-        const choice = await this.lemonade.chat(messages, tools, signal)
+        const choice = await this.lemonade.chat(messages, tools, signal, (delta) =>
+          emit({ type: 'reasoning_delta', text: delta })
+        )
         const message = choice.message
         const toolCalls = message.tool_calls ?? []
+        // Split off the chain-of-thought once, right after the completion and
+        // before any branch. Emitting the final `reasoning` here finalizes the
+        // live-streamed preview (collapsing its panel) for every path , including
+        // the dropped forced-plan and finish-nudge turns below , so a streamed
+        // thought never gets stranded open. `content` is the clean, user-facing
+        // text with any <think> block stripped, reused wherever we store history.
+        const { reasoning, content } = splitReasoning(message)
+        if (reasoning) emit({ type: 'reasoning', text: reasoning })
 
         // Final answer (no tool calls). If the model is trying to stop while its
         // plan still has unfinished steps (often after a mid-task compaction
@@ -398,9 +408,7 @@ export class Agent {
             })
             continue
           }
-          const { reasoning, content } = splitReasoning(message)
           messages.push(stripReasoningForHistory(message, content))
-          if (reasoning) emit({ type: 'reasoning', text: reasoning })
           emit({ type: 'assistant_text', text: content })
           emit({ type: 'done' })
           return
@@ -431,12 +439,10 @@ export class Agent {
         }
 
         // Record the assistant turn verbatim so tool results can reference its
-        // tool_call ids on the next iteration. Reasoning (if any) is surfaced for
-        // display but stripped from the stored message so it never re-enters the
-        // model-facing context.
-        const { reasoning: turnReasoning, content: turnContent } = splitReasoning(message)
-        if (turnReasoning) emit({ type: 'reasoning', text: turnReasoning })
-        messages.push(stripReasoningForHistory(message, turnContent))
+        // tool_call ids on the next iteration. The chain-of-thought (if any) was
+        // already surfaced above; it's stripped from the stored message so it
+        // never re-enters the model-facing context.
+        messages.push(stripReasoningForHistory(message, content))
 
         // Execute every requested call. A turn "did real work" if it invoked at
         // least one non-planning tool; a plan-only turn stays free.

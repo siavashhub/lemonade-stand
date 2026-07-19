@@ -25,6 +25,7 @@ import {
   ArrowDownTrayIcon,
   ClockIcon,
   CpuChipIcon,
+  LightBulbIcon,
   MicrophoneIcon,
   PitcherIcon,
   ShieldCheckIcon,
@@ -866,10 +867,28 @@ export function App(): JSX.Element {
       if (event.type === 'assistant_text') {
         collected.push({ role: 'assistant', content: event.text })
         setEntries((e) => [...e, { kind: 'assistant', text: event.text }])
+      } else if (event.type === 'reasoning_delta') {
+        // A chunk of live chain-of-thought. Append to the in-progress reasoning
+        // block if one is still streaming; otherwise start a fresh one.
+        setEntries((e) => {
+          const last = e[e.length - 1]
+          if (last && last.kind === 'reasoning' && last.streaming) {
+            return [...e.slice(0, -1), { ...last, text: last.text + event.text }]
+          }
+          return [...e, { kind: 'reasoning', text: event.text, streaming: true }]
+        })
       } else if (event.type === 'reasoning') {
         // Display-only chain-of-thought: shown in the transcript but never added
         // to `collected` (the model-facing history), so it can't bloat context.
-        setEntries((e) => [...e, { kind: 'reasoning', text: event.text }])
+        // This is the final text for the turn , replace the live-streamed preview
+        // (authoritative) and drop `streaming` so the panel collapses to a summary.
+        setEntries((e) => {
+          const last = e[e.length - 1]
+          if (last && last.kind === 'reasoning' && last.streaming) {
+            return [...e.slice(0, -1), { kind: 'reasoning', text: event.text }]
+          }
+          return [...e, { kind: 'reasoning', text: event.text }]
+        })
       } else if (event.type === 'tool_call') {
         setEntries((e) => [
           ...e,
@@ -948,6 +967,12 @@ export function App(): JSX.Element {
       setBusy(false)
     }
   }
+
+  // While the model is actively streaming its chain-of-thought, hide the playful
+  // "Working" phrase , the reasoning panel is the live indicator. It returns once
+  // the thought finishes (or when there's no reasoning at all).
+  const lastEntry = entries[entries.length - 1]
+  const reasoningActive = lastEntry?.kind === 'reasoning' && !!lastEntry.streaming
 
   return (
     <div className="app">
@@ -1138,7 +1163,7 @@ export function App(): JSX.Element {
           <Line key={i} entry={entry} onOpenNapkin={setNapkin} />
         ))}
 
-        {(busy || transcribing) && (
+        {(busy || transcribing) && !reasoningActive && (
           <div className="thinking" aria-live="polite">
             <span
               key={thinkingTick}
@@ -2649,6 +2674,64 @@ function PlanBar({
   )
 }
 
+// Condense a chain-of-thought into a one-line gist for the collapsed reasoning
+// panel, in the style of "Reasoned about the Omni router's handling…". We take
+// the first sentence, strip a leading first-person lead-in ("I'm looking at…",
+// "Let me…") so it reads as a recap, cap the length, and trail off with an
+// ellipsis so it reads naturally.
+function reasoningSummary(text: string): string {
+  const firstLine = text.trim().split(/\n+/)[0] ?? ''
+  const firstSentence = (firstLine.split(/(?<=[.!?])\s/)[0] ?? firstLine).trim()
+  let gist = firstSentence
+    .replace(
+      /^(i'?m|i am|i've|i have|i'?ll|i will|i need to|i should|i want to|let me|let's|first,?|now,?|okay,?|ok,?|so,?|looking at|checking|considering)\s+/i,
+      ''
+    )
+    .trim()
+  if (!gist) gist = firstSentence
+  const max = 72
+  if (gist.length > max) gist = gist.slice(0, max)
+  // Drop any trailing punctuation/ellipsis before we add our own.
+  gist = gist.replace(/[\s.,;:…]+$/, '')
+  if (!gist) return 'Reasoned it through…'
+  return `Reasoned ${gist.charAt(0).toLowerCase()}${gist.slice(1)}…`
+}
+
+// The model's chain-of-thought. While it streams it stays expanded so you can
+// watch it think; once the turn moves on it collapses to a one-line gist (click
+// to re-expand). The body is capped to a few lines and auto-scrolls so a long
+// thought never balloons the transcript.
+function ReasoningLine({
+  entry
+}: {
+  entry: Extract<Entry, { kind: 'reasoning' }>
+}): JSX.Element {
+  const streaming = entry.streaming ?? false
+  const [open, setOpen] = useState(streaming)
+
+  // Collapse automatically the moment streaming finishes; expand when a fresh
+  // thought starts streaming.
+  useEffect(() => {
+    setOpen(streaming)
+  }, [streaming])
+
+  return (
+    <details
+      className={`line reasoning ${streaming ? 'streaming' : ''}`}
+      open={open}
+      onToggle={(e) => setOpen((e.currentTarget as HTMLDetailsElement).open)}
+    >
+      <summary className="reasoning-summary">
+        <LightBulbIcon className="reasoning-icon" />
+        <span className="reasoning-gist">
+          {streaming ? 'Thinking…' : reasoningSummary(entry.text)}
+        </span>
+      </summary>
+      <div className="reasoning-body">{entry.text}</div>
+    </details>
+  )
+}
+
 function Line({
   entry,
   onOpenNapkin
@@ -2710,12 +2793,7 @@ function Line({
     return <div className="line warning">{entry.text}</div>
   }
   if (entry.kind === 'reasoning') {
-    return (
-      <details className="line reasoning">
-        <summary className="reasoning-summary">Reasoning</summary>
-        <div className="reasoning-body">{entry.text}</div>
-      </details>
-    )
+    return <ReasoningLine entry={entry} />
   }
   return (
     <div className={`line ${entry.kind}`}>

@@ -241,9 +241,12 @@ export type ApprovalDecision = 'approve' | 'deny' | 'always'
 export type TranscriptEntry =
   | { kind: 'user'; text: string }
   | { kind: 'assistant'; text: string }
-  // The model's chain-of-thought, shown as a dimmed, collapsible block. Kept in
-  // the visual transcript (so it persists/restores) but not in model history.
-  | { kind: 'reasoning'; text: string }
+  // The model's chain-of-thought, shown as a live-streaming block that collapses
+  // to a one-line summary once the turn moves on. Kept in the visual transcript
+  // (so it persists/restores) but not in model history. `streaming` is transient
+  // UI state , true only while the thought is still being written; it is absent
+  // (falsy) on persisted/restored entries, which always render collapsed.
+  | { kind: 'reasoning'; text: string; streaming?: boolean }
   | { kind: 'tool'; label: string; detail: string; ok?: boolean }
   | { kind: 'plan'; steps: PlanStep[] }
   | { kind: 'napkin'; napkin: Napkin }
@@ -323,9 +326,12 @@ export type PitcherEvent =
 /** Streamed events the main process pushes to the renderer during a turn. */
 export type AgentEvent =
   | { type: 'assistant_text'; text: string }
-  // The model's chain-of-thought for a turn, surfaced for display only. It is
-  // never fed back into the model-facing history (would bloat the context
-  // window) and is never spoken by TTS.
+  // A chunk of the model's chain-of-thought as it streams, surfaced for a live
+  // "thinking" preview. Purely for display , never fed back into history.
+  | { type: 'reasoning_delta'; text: string }
+  // The full, final chain-of-thought for a turn. Marks the live preview done so
+  // its panel collapses to a summary. Display only: never fed back into the
+  // model-facing history (would bloat the context window) and never spoken by TTS.
   | { type: 'reasoning'; text: string }
   | { type: 'tool_call'; server: string; tool: string; args: unknown }
   | { type: 'tool_result'; server: string; tool: string; ok: boolean; preview: string }

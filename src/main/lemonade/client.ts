@@ -784,7 +784,8 @@ export class LemonadeClient {
   async chat(
     messages: ChatCompletionMessageParam[],
     tools: ChatCompletionTool[],
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    onReasoning?: (delta: string) => void
   ): Promise<OpenAI.Chat.Completions.ChatCompletion.Choice> {
     const stream = this.client.beta.chat.completions.stream(
       {
@@ -808,8 +809,13 @@ export class LemonadeClient {
       const delta = chunk.choices[0]?.delta as
         | { reasoning_content?: unknown; reasoning?: unknown }
         | undefined
-      if (typeof delta?.reasoning_content === 'string') reasoning += delta.reasoning_content
-      else if (typeof delta?.reasoning === 'string') reasoning += delta.reasoning
+      if (typeof delta?.reasoning_content === 'string') {
+        reasoning += delta.reasoning_content
+        onReasoning?.(delta.reasoning_content)
+      } else if (typeof delta?.reasoning === 'string') {
+        reasoning += delta.reasoning
+        onReasoning?.(delta.reasoning)
+      }
     })
     // If the caller aborts, tear the stream (and its socket) down immediately so
     // the server stops generating instead of running to completion unheard.

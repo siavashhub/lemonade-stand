@@ -493,6 +493,8 @@ function describeEvent(e: AgentEvent): string {
       return `assistant_text len=${e.text.trim().length}`
     case 'reasoning':
       return `reasoning len=${e.text.trim().length}`
+    case 'reasoning_delta':
+      return `reasoning_delta len=${e.text.length}`
     case 'tool_approval_request':
       return `tool_approval_request ${e.server}__${e.tool}`
     case 'step_limit_request':

@@ -1003,43 +1003,75 @@ body {
   font-size: 13px;
 }
 
-/* The model's chain-of-thought. Dimmed and collapsed by default so it never
-   competes with the final answer; click "Reasoning" to expand. */
+/* The model's chain-of-thought. Streams in expanded so you can watch it think,
+   then collapses to a one-line gist once the turn moves on. Kept compact , small
+   type, tight leading , and the body is capped to ~5 lines and auto-scrolls so a
+   long thought never balloons the transcript. */
 .line.reasoning {
   align-self: flex-start;
   max-width: 100%;
   background: var(--tool);
   border-left: 2px solid var(--muted);
   border-radius: 4px;
-  padding: 4px 10px;
+  padding: 3px 10px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 11px;
 }
 
 .reasoning-summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   cursor: pointer;
   user-select: none;
   list-style: none;
   color: var(--muted);
   font-style: italic;
   letter-spacing: 0.02em;
+  line-height: 1.4;
 }
 
 .reasoning-summary::-webkit-details-marker {
   display: none;
 }
 
-.reasoning-summary::before {
-  content: '💭 ';
+.reasoning-icon {
+  flex: 0 0 auto;
+  font-size: 13px;
+  opacity: 0.8;
+}
+
+.line.reasoning.streaming .reasoning-icon {
+  animation: reasoning-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes reasoning-pulse {
+  0%,
+  100% {
+    opacity: 0.4;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+.reasoning-gist {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .reasoning-body {
-  margin-top: 6px;
-  padding-top: 6px;
+  margin-top: 5px;
+  padding-top: 5px;
   border-top: 1px solid var(--border);
   white-space: pre-wrap;
-  line-height: 1.5;
+  line-height: 1.4;
+  font-size: 11px;
   font-family: ui-monospace, 'Cascadia Code', Consolas, monospace;
+  /* ~5 lines tall, then scroll (keeping the latest lines in view). */
+  max-height: calc(11px * 1.4 * 5);
+  overflow-y: auto;
 }
 
 /* Live task plan/todo checklist emitted by the agent's update_plan tool. Shown
