@@ -2,6 +2,7 @@
 
 ![Lemonade Stand](resources/banner.svg)
 
+
 A desktop **MCP client / agent host** that drives local models served by
 [Lemonade](https://github.com/lemonade-sdk/lemonade) (`lemond`).
 
@@ -18,6 +19,10 @@ The agent uses HTTP API and  **lemond's own `/mcp` gateway** as another MCP
 server (see `config/servers.json`), so Lemonade's `lemonade_chat` /
 `lemonade_omni` / image / transcription tools show up alongside third-party
 tools.
+
+## Demo
+
+https://github.com/siavashhub/lemonade-stand/raw/main/demo/lemonade-stand-demo.mp4
 
 ## Prerequisites
 
