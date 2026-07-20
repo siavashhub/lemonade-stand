@@ -129,7 +129,11 @@ const DEFAULT_SYSTEM_PROMPT =
   'briefly report results after your tool calls have completed. ' +
   'For a task that takes several steps or tool calls, first call the update_plan tool to lay out ' +
   'a short todo list, then call it again as you go to mark steps in-progress and completed. ' +
-  'Skip planning for simple, one-step requests.'
+  'Skip planning for simple, one-step requests. ' +
+  'To show an image, a diagram, or other rich/copyable artifact, call the show_napkin tool so it ' +
+  'renders in the side panel. Never paste base64 data or a data: URL into your chat reply , the ' +
+  'chat cannot render it. When a tool returns an image, it is already shown to the user on the ' +
+  'napkin panel; just acknowledge it briefly instead of trying to reproduce the bytes.'
 
 const SERVERS_FILE = 'config/servers.json'
 // Optional, gitignored per-developer override merged over SERVERS_FILE. Keeps
