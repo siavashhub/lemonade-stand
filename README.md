@@ -14,7 +14,7 @@ A desktop **MCP client / agent host** that drives local models served by
 
 ## Architecture
 
-The agent can also treat **lemond's own `/mcp` gateway** as just another MCP
+The agent uses HTTP API and  **lemond's own `/mcp` gateway** as another MCP
 server (see `config/servers.json`), so Lemonade's `lemonade_chat` /
 `lemonade_omni` / image / transcription tools show up alongside third-party
 tools.
@@ -24,7 +24,10 @@ tools.
 - Node.js 22.12+ (tested on 22.23 and 24).
 - A running `lemond` server. Note its base URL and port.
 
-## Setup
+## Quick Run
+Headover to the [release page](https://github.com/siavashhub/lemonade-stand/releases) section and download and run the installer.
+
+## Dev Setup
 
 ```powershell
 npm install
@@ -42,7 +45,7 @@ You can also change the base URL and API key
 at any time from inside the app by clicking the **server-status** pill in the
 top bar.
 
-## Run
+## Dev Run
 
 ```powershell
 npm run dev        # launch the app with hot reload
@@ -52,8 +55,6 @@ npm run build      # production build into out/
 
 `npm run dev` automatically runs a pre-step that bootstraps Electron if needed.
 
-Hover the **Lemonade Stand** brand text to see the version `dev` in a local
-run, or the semantic version in an installed build. To use packaged installers, see the [release guide](docs/RELEASING.md).
 
 ### Lemonade Server Run
 The quickest way to run a lemonade server would to be install docker and run it using below command:
