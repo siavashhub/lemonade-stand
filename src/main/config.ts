@@ -88,7 +88,9 @@ export function loadConfig(cwd: string = process.cwd()): AppConfig {
       saved.baseUrl ?? process.env.LEMONADE_BASE_URL ?? 'http://localhost:13305/api/v1',
     lemonadeApiKey: saved.apiKey ?? process.env.LEMONADE_API_KEY ?? '',
     model: saved.model ?? process.env.LEMONADE_MODEL ?? 'Qwen3-1.7B-GGUF',
-    maxSteps: Number(process.env.AGENT_MAX_STEPS ?? '8'),
+    // A value saved in settings.json wins so packaged users can tune it without
+    // touching env; the env var is only the initial default before that.
+    maxSteps: saved.maxSteps ?? Number(process.env.AGENT_MAX_STEPS ?? '20'),
     // The user's last in-app choice wins and survives restarts; the env var is
     // only the initial default before they've ever changed it in the UI.
     contextSize:
@@ -142,6 +144,10 @@ const SETTINGS_FILE = 'config/settings.json'
 // way servers.local.json overrides servers.json.
 const SETTINGS_LOCAL_FILE = 'config/settings.local.json'
 const PITCHERS_FILE = 'config/pitchers.json'
+// Optional, gitignored per-developer override merged over PITCHERS_FILE, keyed
+// by pitcher id, so local scheduled-task edits stay out of the tracked defaults
+// (and out of `git status`), exactly like servers.local.json.
+const PITCHERS_LOCAL_FILE = 'config/pitchers.local.json'
 
 /** User-chosen state that must survive restarts (e.g. the active chat model). */
 export interface AppSettings {
@@ -160,6 +166,9 @@ export interface AppSettings {
   /** Runtime context window (tokens) the user last picked in the UI. Restored
    * on the next launch so the choice survives restarts. */
   contextSize?: number
+  /** Max tool-calling iterations per user turn before the loop stops. Lets a
+   * packaged user tune the safety rail from settings.json without env vars. */
+  maxSteps?: number
 }
 
 /** Read one settings file's JSON object; null when the file is absent/malformed. */
@@ -272,20 +281,47 @@ export function writeServers(cwd: string, servers: McpServerConfig[]): void {
   writeFileSync(path, JSON.stringify({ ...existing, servers }, null, 2) + '\n', 'utf8')
 }
 
-/** Read every configured Pitcher (scheduled task) from disk. */
-export function readPitchers(cwd: string): Pitcher[] {
+/** Read one pitcher-config file's `pitchers` array; null when the file is absent. */
+function readPitchersFile(cwd: string, file: string): Pitcher[] | null {
   try {
-    const raw = readFileSync(resolve(cwd, PITCHERS_FILE), 'utf8')
+    const raw = readFileSync(resolve(cwd, file), 'utf8')
     const parsed = JSON.parse(raw) as { pitchers?: Pitcher[] }
     return parsed.pitchers ?? []
   } catch {
-    return []
+    return null
   }
 }
 
-/** Persist the Pitcher list, preserving any sibling keys (e.g. the note). */
+/** Layer a local override list over the base list, keyed by pitcher id: a local
+ * entry replaces the same-id base entry in place; brand-new ids are appended. */
+function mergePitchers(base: Pitcher[], local: Pitcher[]): Pitcher[] {
+  const byId = new Map(base.map((p) => [p.id, p]))
+  const order = base.map((p) => p.id)
+  for (const p of local) {
+    if (!byId.has(p.id)) order.push(p.id)
+    byId.set(p.id, p)
+  }
+  return order.map((id) => byId.get(id) as Pitcher)
+}
+
+/** Read every configured Pitcher (scheduled task), with the gitignored local
+ * override (config/pitchers.local.json) merged over the committed defaults. A
+ * developer's personal pitcher edits live only in the local file, so the tracked
+ * config/pitchers.json never picks up local churn. */
+export function readPitchers(cwd: string): Pitcher[] {
+  const base = readPitchersFile(cwd, PITCHERS_FILE) ?? []
+  const local = readPitchersFile(cwd, PITCHERS_LOCAL_FILE)
+  return local ? mergePitchers(base, local) : base
+}
+
+/** Persist the Pitcher list, preserving any sibling keys (e.g. the note). Writes
+ * to the gitignored local override when it exists, so UI edits in a dev checkout
+ * don't dirty the tracked config/pitchers.json. */
 export function writePitchers(cwd: string, pitchers: Pitcher[]): void {
-  const path = resolve(cwd, PITCHERS_FILE)
+  const target = existsSync(resolve(cwd, PITCHERS_LOCAL_FILE))
+    ? PITCHERS_LOCAL_FILE
+    : PITCHERS_FILE
+  const path = resolve(cwd, target)
   let existing: Record<string, unknown> = {}
   try {
     existing = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>
@@ -293,6 +329,46 @@ export function writePitchers(cwd: string, pitchers: Pitcher[]): void {
     // Fresh file is fine.
   }
   writeFileSync(path, JSON.stringify({ ...existing, pitchers }, null, 2) + '\n', 'utf8')
+}
+
+// Seed content for the gitignored local override files. Each starts empty so it
+// contributes no overrides (the committed defaults still show), but its mere
+// existence redirects the app's writes here. The `$schema-note` documents the
+// file for a developer who spots it after a fresh clone.
+const LOCAL_OVERRIDE_SEEDS: Record<string, Record<string, unknown>> = {
+  [SERVERS_LOCAL_FILE]: {
+    '$schema-note':
+      'LOCAL, gitignored per-developer override. Entries here are merged over config/servers.json by server id (same id replaces the committed default; new ids are appended). The app writes your personal server edits here so the tracked config/servers.json stays clean.',
+    servers: []
+  },
+  [SETTINGS_LOCAL_FILE]: {
+    '$schema-note':
+      'LOCAL, gitignored per-developer override merged over config/settings.json. The app writes your personal UI state (model, connection, context size, …) here so the tracked config/settings.json stays clean.'
+  },
+  [PITCHERS_LOCAL_FILE]: {
+    '$schema-note':
+      'LOCAL, gitignored per-developer override. Entries here are merged over config/pitchers.json by pitcher id (same id replaces the committed default; new ids are appended). The app writes your personal scheduled-task edits here so the tracked config/pitchers.json stays clean.',
+    pitchers: []
+  }
+}
+
+/** Seed the gitignored local override files (servers/settings/pitchers) if they
+ * don't exist yet. Call this only in a dev checkout (`!app.isPackaged`): it makes
+ * the app write UI edits to the `*.local.json` overrides instead of dirtying the
+ * committed defaults, and — because the seeded files are visible and self-
+ * documenting — a developer cloning the repo discovers the mechanism on first
+ * run. Packaged builds skip this: they seed a writable per-user copy elsewhere. */
+export function seedLocalOverrides(cwd: string): void {
+  for (const [file, seed] of Object.entries(LOCAL_OVERRIDE_SEEDS)) {
+    const path = resolve(cwd, file)
+    if (existsSync(path)) continue
+    try {
+      writeFileSync(path, JSON.stringify(seed, null, 2) + '\n', 'utf8')
+    } catch {
+      // A failed seed is non-fatal: the app falls back to writing the tracked
+      // default, exactly as before this helper existed.
+    }
+  }
 }
 
 /** The Market catalogue of installable tools/skills. */
