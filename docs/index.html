@@ -1,0 +1,1792 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Lemonade Stand: On-device MCP client & AI harness</title>
+    <meta
+      name="description"
+      content="Lemonade Stand is a desktop MCP client and agent host that drives local models served by Lemonade (lemond). Stock tools, watch the agent think and keep everything on-device."
+    />
+    <style>
+      :root,
+      :root[data-theme='dark'] {
+        --bg: #0f1a1c;
+        --panel: #16262a;
+        --border: #274044;
+        --text: #e4f2f1;
+        --muted: #86a5a3;
+        --accent: #f5c542;
+        --accent-deep: #c99a26;
+        --accent-soft: rgba(245, 197, 66, 0.14);
+        --accent-glow: rgba(245, 197, 66, 0.4);
+        --on-accent: #1a1400;
+        --user: #1d4a4a;
+        --user-text: #d7f6f2;
+        --tool: #19282c;
+        --err: #4a2626;
+        --err-text: #ffcaca;
+        --ok: #35d0a0;
+        --awning: #e05a5a;
+        --leaf: #5aa14e;
+        --c-system: #6ea8fe;
+        --c-tools: #7b8cff;
+        --c-messages: #4fd1a5;
+        --c-results: #d9a441;
+        --c-other: #9aa0aa;
+        --c-reserve: #4a6a8a;
+      }
+
+      :root[data-theme='light'] {
+        --bg: #fbf8e4;
+        --panel: #fffdf0;
+        --border: #eae2b3;
+        --text: #2d2a18;
+        --muted: #8b8565;
+        --accent: #22b07d;
+        --accent-deep: #17916a;
+        --accent-soft: rgba(34, 176, 125, 0.14);
+        --accent-glow: rgba(34, 176, 125, 0.32);
+        --on-accent: #ffffff;
+        --user: #d6f3e6;
+        --user-text: #14503a;
+        --tool: #f6f1d5;
+        --err: #fde3e3;
+        --err-text: #a52c2c;
+        --ok: #22b07d;
+        --awning: #e05a5a;
+        --leaf: #5aa14e;
+        --c-system: #3b82c4;
+        --c-tools: #6a6fd8;
+        --c-messages: #2fa07a;
+        --c-results: #c98a2a;
+        --c-other: #8b8f98;
+        --c-reserve: #6a8fb0;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html {
+        scroll-behavior: smooth;
+      }
+
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        font-size: 16px;
+        line-height: 1.6;
+        overflow-x: hidden;
+        transition: background 0.4s ease, color 0.4s ease;
+      }
+
+      ::-webkit-scrollbar {
+        width: 10px;
+      }
+      ::-webkit-scrollbar-track {
+        background: var(--bg);
+      }
+      ::-webkit-scrollbar-thumb {
+        background: var(--border);
+        border-radius: 5px;
+      }
+      ::-webkit-scrollbar-thumb:hover {
+        background: var(--muted);
+      }
+
+      a {
+        color: var(--accent);
+        text-decoration: none;
+      }
+      a:hover {
+        text-decoration: underline;
+      }
+
+      /* Ambient citrus glow that follows the page, layered behind content. */
+      .backdrop {
+        position: fixed;
+        inset: 0;
+        z-index: -2;
+        background:
+          radial-gradient(600px circle at 15% 10%, var(--accent-soft), transparent 45%),
+          radial-gradient(700px circle at 85% 40%, rgba(90, 161, 78, 0.1), transparent 50%),
+          radial-gradient(500px circle at 50% 90%, var(--accent-soft), transparent 45%);
+        transition: opacity 0.4s ease;
+      }
+
+      /* Scroll progress bar pinned to the very top of the viewport. */
+      .progress {
+        position: fixed;
+        top: 0;
+        left: 0;
+        height: 3px;
+        width: 0;
+        background: linear-gradient(90deg, var(--accent), var(--leaf));
+        z-index: 100;
+        box-shadow: 0 0 10px var(--accent-glow);
+      }
+
+      /* ---- Floating page nav ---- */
+      .pagenav {
+        position: fixed;
+        top: 18px;
+        right: 18px;
+        z-index: 90;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        background: color-mix(in srgb, var(--panel) 82%, transparent);
+        backdrop-filter: blur(10px);
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        padding: 6px 8px 6px 14px;
+      }
+      .pagenav .brand-mini {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        font-weight: 700;
+        font-size: 14px;
+      }
+      .pagenav .brand-mini svg {
+        width: 20px;
+        height: 20px;
+      }
+      .theme-toggle {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 34px;
+        height: 34px;
+        border-radius: 50%;
+        border: 1px solid var(--border);
+        background: var(--bg);
+        color: var(--text);
+        cursor: pointer;
+        font-size: 15px;
+        transition: border-color 0.2s ease, transform 0.2s ease;
+      }
+      .theme-toggle:hover {
+        border-color: var(--accent);
+        transform: rotate(-15deg);
+      }
+
+      /* Dot rail down the left edge tracking scroll sections. */
+      .dotrail {
+        position: fixed;
+        left: 20px;
+        top: 50%;
+        transform: translateY(-50%);
+        z-index: 90;
+        display: flex;
+        flex-direction: column;
+        gap: 14px;
+      }
+      .dotrail button {
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        border: 1px solid var(--muted);
+        background: transparent;
+        cursor: pointer;
+        padding: 0;
+        transition: all 0.25s ease;
+      }
+      .dotrail button.active {
+        background: var(--accent);
+        border-color: var(--accent);
+        box-shadow: 0 0 10px var(--accent-glow);
+        transform: scale(1.3);
+      }
+      @media (max-width: 900px) {
+        .dotrail {
+          display: none;
+        }
+      }
+
+      /* ============================================================
+         Sections & scroll-reveal
+         ============================================================ */
+      section {
+        max-width: 1080px;
+        margin: 0 auto;
+        padding: 84px 24px;
+        position: relative;
+      }
+
+      .reveal {
+        opacity: 0;
+        transform: translateY(38px);
+        transition: opacity 0.7s cubic-bezier(0.2, 0.7, 0.2, 1),
+          transform 0.7s cubic-bezier(0.2, 0.7, 0.2, 1);
+      }
+      .reveal.in {
+        opacity: 1;
+        transform: none;
+      }
+      .reveal.d1 {
+        transition-delay: 0.08s;
+      }
+      .reveal.d2 {
+        transition-delay: 0.16s;
+      }
+      .reveal.d3 {
+        transition-delay: 0.24s;
+      }
+
+      .eyebrow {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        color: var(--accent);
+        margin-bottom: 14px;
+      }
+      .eyebrow::before {
+        content: '';
+        width: 22px;
+        height: 2px;
+        background: var(--accent);
+        border-radius: 2px;
+      }
+
+      h1,
+      h2,
+      h3 {
+        line-height: 1.15;
+        margin: 0 0 16px;
+        letter-spacing: -0.02em;
+      }
+      h2 {
+        font-size: clamp(28px, 4vw, 44px);
+        font-weight: 800;
+      }
+      .lead {
+        font-size: clamp(17px, 2vw, 20px);
+        color: var(--muted);
+        max-width: 640px;
+      }
+
+      .grid2 {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 48px;
+        align-items: center;
+      }
+      .grid2.rev .copy {
+        order: 2;
+      }
+      @media (max-width: 860px) {
+        .grid2 {
+          grid-template-columns: 1fr;
+          gap: 36px;
+        }
+        .grid2.rev .copy {
+          order: 0;
+        }
+      }
+
+      /* ============================================================
+         HERO
+         ============================================================ */
+      .hero {
+        min-height: 100vh;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        text-align: center;
+        max-width: 1200px;
+      }
+      .hero-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 6px 14px;
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        background: var(--panel);
+        font-size: 13px;
+        color: var(--muted);
+        margin-bottom: 28px;
+      }
+      .hero-badge .pip {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: #3fb950;
+        box-shadow: 0 0 8px #3fb95088;
+      }
+      .hero-logo {
+        width: 108px;
+        height: 108px;
+        margin-bottom: 22px;
+        filter: drop-shadow(0 12px 30px rgba(0, 0, 0, 0.35));
+        animation: floaty 5s ease-in-out infinite;
+      }
+      @keyframes floaty {
+        0%,
+        100% {
+          transform: translateY(0);
+        }
+        50% {
+          transform: translateY(-10px);
+        }
+      }
+      .hero h1 {
+        font-size: clamp(40px, 8vw, 84px);
+        font-weight: 900;
+        letter-spacing: -0.03em;
+      }
+      .hero h1 .lemon {
+        color: var(--accent);
+      }
+      .hero h1 .stand {
+        color: var(--leaf);
+      }
+      .hero .lead {
+        margin: 6px auto 0;
+        font-size: clamp(17px, 2.4vw, 22px);
+      }
+      .hero .lead code {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 1px 7px;
+        color: var(--accent);
+        font-size: 0.9em;
+      }
+      .cta-row {
+        display: flex;
+        gap: 14px;
+        flex-wrap: wrap;
+        justify-content: center;
+        margin-top: 34px;
+      }
+      .btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 9px;
+        border-radius: 10px;
+        padding: 13px 24px;
+        font-weight: 700;
+        font-size: 15px;
+        cursor: pointer;
+        border: 1px solid var(--border);
+        background: var(--panel);
+        color: var(--text);
+        transition: transform 0.15s ease, border-color 0.15s ease, box-shadow 0.2s ease;
+      }
+      .btn:hover {
+        transform: translateY(-2px);
+        text-decoration: none;
+      }
+      .btn.primary {
+        background: var(--accent);
+        color: var(--on-accent);
+        border-color: var(--accent);
+        box-shadow: 0 8px 24px -8px var(--accent-glow);
+      }
+      .btn.primary:hover {
+        box-shadow: 0 12px 30px -8px var(--accent-glow);
+      }
+
+      .btn.secondary {
+        background: #5aa14e;
+        color: var(--on-accent);
+        border-color: #5aa14e;
+        box-shadow: 0 8px 24px -8px var(--accent-glow);
+      } 
+      
+      .btn.secondary:hover {
+        box-shadow: 0 12px 30px -8px var(--accent-glow);
+      }      
+
+      .btn.white {
+        background: #ffffff;
+        color: var(--on-accent);
+        border-color: #ffffff;
+        box-shadow: 0 8px 24px -8px var(--accent-glow);
+      } 
+      
+      .btn.white:hover {
+        box-shadow: 0 12px 30px -8px var(--accent-glow);
+      }         
+
+      .scrollcue {
+        margin-top: 60px;
+        color: var(--muted);
+        font-size: 13px;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 8px;
+        animation: bob 2s ease-in-out infinite;
+      }
+      @keyframes bob {
+        0%,
+        100% {
+          transform: translateY(0);
+          opacity: 0.7;
+        }
+        50% {
+          transform: translateY(8px);
+          opacity: 1;
+        }
+      }
+
+      .stat-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 36px;
+        justify-content: center;
+        margin-top: 54px;
+        padding-top: 34px;
+        border-top: 1px solid var(--border);
+        width: min(760px, 100%);
+      }
+      .stat b {
+        display: block;
+        font-size: 30px;
+        font-weight: 800;
+        color: var(--accent);
+      }
+      .stat span {
+        font-size: 13px;
+        color: var(--muted);
+      }
+
+      /* ============================================================
+         APP MOCKUP CHROME, replicates the Electron window
+         ============================================================ */
+      .window {
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        background: var(--bg);
+        overflow: hidden;
+        box-shadow: 0 30px 70px -30px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255, 255, 255, 0.02);
+      }
+      .window.tilt {
+        transform: perspective(1400px) rotateY(-6deg) rotateX(2deg);
+        transition: transform 0.5s ease;
+      }
+      .window.tilt:hover {
+        transform: perspective(1400px) rotateY(0) rotateX(0);
+      }
+
+      .topbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 9px 12px;
+        border-bottom: 1px solid var(--border);
+        background: var(--panel);
+        gap: 8px;
+      }
+      .topbar .brand {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        font-weight: 600;
+        font-size: 13.5px;
+      }
+      .topbar .brand svg {
+        width: 20px;
+        height: 20px;
+      }
+      .hamburger {
+        border: 1px solid var(--border);
+        background: var(--bg);
+        color: var(--text);
+        border-radius: 6px;
+        padding: 3px 6px;
+        display: inline-flex;
+        line-height: 1;
+      }
+      .session-seg {
+        display: inline-flex;
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        overflow: hidden;
+        background: var(--bg);
+      }
+      .session-seg span {
+        padding: 6px 13px;
+        font-size: 12px;
+        font-weight: 600;
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+      }
+      .session-seg span:first-child {
+        color: var(--accent);
+      }
+      .session-seg span + span {
+        border-left: 1px solid var(--border);
+      }
+      .topbar-right {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .pill-btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        border: 1px solid var(--border);
+        background: var(--bg);
+        border-radius: 6px;
+        padding: 5px 9px;
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--text);
+      }
+      .pill-btn.primary {
+        border-color: var(--accent);
+        color: var(--accent);
+      }
+      .tools-badge {
+        background: var(--accent);
+        color: var(--on-accent);
+        border-radius: 999px;
+        padding: 0 6px;
+        font-size: 10px;
+        font-weight: 700;
+      }
+      .winctl {
+        display: inline-flex;
+        gap: 5px;
+        margin-left: 4px;
+      }
+      .winctl i {
+        width: 11px;
+        height: 11px;
+        border-radius: 50%;
+        display: inline-block;
+      }
+      .winctl i:nth-child(1) {
+        background: #f5bf4f;
+      }
+      .winctl i:nth-child(2) {
+        background: #4fd08b;
+      }
+      .winctl i:nth-child(3) {
+        background: #e05a5a;
+      }
+
+      /* ---- transcript / chat ---- */
+      .transcript {
+        padding: 16px;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        background: var(--bg);
+        min-height: 60px;
+      }
+      .role {
+        font-size: 11px;
+        color: var(--muted);
+        margin-bottom: 2px;
+      }
+      .line {
+        display: flex;
+        flex-direction: column;
+        max-width: 82%;
+      }
+      .line.user {
+        align-self: flex-end;
+        align-items: flex-end;
+      }
+      .bubble {
+        white-space: pre-wrap;
+        padding: 9px 12px;
+        border-radius: 10px;
+        background: var(--panel);
+        line-height: 1.45;
+        font-size: 13.5px;
+      }
+      .line.user .bubble {
+        background: var(--user);
+        color: var(--user-text);
+      }
+      .line.tool {
+        max-width: 100%;
+        flex-direction: row;
+        gap: 8px;
+        align-items: baseline;
+        font-family: ui-monospace, 'Cascadia Code', Consolas, monospace;
+        font-size: 12px;
+        background: var(--tool);
+        border-left: 2px solid var(--accent);
+        padding: 6px 10px;
+        border-radius: 4px;
+      }
+      .tool-label {
+        color: var(--accent);
+        white-space: nowrap;
+      }
+      .tool-detail {
+        color: var(--muted);
+      }
+
+      /* reasoning surface */
+      .reasoning {
+        border: 1px dashed var(--border);
+        border-radius: 8px;
+        padding: 8px 11px;
+        font-size: 12.5px;
+        color: var(--muted);
+        font-style: italic;
+        background: color-mix(in srgb, var(--panel) 60%, transparent);
+      }
+      .reasoning b {
+        color: var(--accent);
+        font-style: normal;
+        font-size: 11px;
+        letter-spacing: 0.05em;
+        text-transform: uppercase;
+      }
+
+      .thinking {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        color: var(--muted);
+        font-size: 13px;
+        font-style: italic;
+      }
+      .thinking-lemon {
+        font-size: 16px;
+        display: inline-block;
+        animation: squeeze 1.5s ease-in-out infinite;
+      }
+      @keyframes squeeze {
+        0%,
+        100% {
+          transform: scale(1, 1);
+        }
+        12% {
+          transform: scale(1.18, 0.72);
+        }
+        20% {
+          transform: scale(0.9, 1.1);
+        }
+        30% {
+          transform: scale(1, 1);
+        }
+      }
+
+      /* ---- approval card ---- */
+      .approval {
+        border: 1px solid var(--accent);
+        border-radius: 8px;
+        background: var(--panel);
+        padding: 12px;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .approval-head {
+        font-size: 13px;
+      }
+      .approval-tool {
+        color: var(--accent);
+        font-family: ui-monospace, Consolas, monospace;
+      }
+      .approval-args {
+        margin: 0;
+        background: var(--bg);
+        border-radius: 6px;
+        padding: 8px;
+        font-size: 12px;
+        color: var(--muted);
+        font-family: ui-monospace, Consolas, monospace;
+        white-space: pre-wrap;
+      }
+      .approval-actions {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+      .approval-actions button {
+        border: none;
+        border-radius: 6px;
+        padding: 6px 12px;
+        font-weight: 600;
+        cursor: pointer;
+        font-size: 12.5px;
+      }
+      .approval-actions .ok {
+        background: var(--accent);
+        color: var(--on-accent);
+      }
+      .approval-actions .always {
+        background: #3a5a3a;
+        color: #d8f5d8;
+      }
+      .approval-actions .deny {
+        background: #5a2a2a;
+        color: #ffcaca;
+      }
+
+      /* ---- composer ---- */
+      .composer {
+        display: flex;
+        gap: 8px;
+        padding: 12px;
+        border-top: 1px solid var(--border);
+        background: var(--panel);
+        align-items: center;
+      }
+      .composer textarea {
+        flex: 1;
+        resize: none;
+        background: var(--bg);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        color: var(--text);
+        padding: 9px 12px;
+        font: inherit;
+        font-size: 13.5px;
+        height: 40px;
+        line-height: 1.4;
+      }
+      .composer .mic-btn,
+      .composer .send-btn {
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        width: 40px;
+        height: 40px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        background: var(--bg);
+        color: var(--text);
+        cursor: pointer;
+        font-size: 16px;
+      }
+      .composer .send-btn {
+        background: var(--accent);
+        color: var(--on-accent);
+        border-color: var(--accent);
+        font-weight: 700;
+      }
+
+      /* ============================================================
+         FEATURE CARDS / GRIDS
+         ============================================================ */
+      .feature-list {
+        margin: 24px 0 0;
+        padding: 0;
+        list-style: none;
+        display: grid;
+        gap: 14px;
+      }
+      .feature-list li {
+        display: flex;
+        gap: 12px;
+        align-items: flex-start;
+      }
+      .feature-list .fi {
+        flex: 0 0 auto;
+        width: 26px;
+        height: 26px;
+        border-radius: 7px;
+        background: var(--accent-soft);
+        color: var(--accent);
+        display: grid;
+        place-items: center;
+        font-size: 14px;
+      }
+      .feature-list b {
+        display: block;
+      }
+      .feature-list span {
+        color: var(--muted);
+        font-size: 14.5px;
+      }
+
+      /* Pantry market grid */
+      .pantry-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+        gap: 14px;
+        margin-top: 28px;
+      }
+      .pantry-card {
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        background: var(--panel);
+        padding: 16px;
+        transition: transform 0.2s ease, border-color 0.2s ease;
+      }
+      .pantry-card:hover {
+        transform: translateY(-4px);
+        border-color: var(--accent);
+      }
+      .pantry-card .emoji {
+        font-size: 24px;
+      }
+      .pantry-card h4 {
+        margin: 8px 0 4px;
+        font-size: 15px;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .pantry-card code {
+        font-size: 11px;
+        color: var(--muted);
+      }
+      .pantry-card p {
+        margin: 6px 0 10px;
+        font-size: 13px;
+        color: var(--muted);
+      }
+      .pantry-card .stock {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 12px;
+        font-weight: 700;
+        color: var(--accent);
+        border: 1px solid var(--accent);
+        border-radius: 6px;
+        padding: 4px 10px;
+      }
+      .toolchips {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 5px;
+        margin-top: 8px;
+      }
+      .toolchips span {
+        font-size: 10.5px;
+        font-family: ui-monospace, Consolas, monospace;
+        color: var(--muted);
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        padding: 1px 7px;
+      }
+
+      /* Napkin panel mock */
+      .napkin {
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        background: var(--panel);
+        overflow: hidden;
+      }
+      .napkin-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 10px 14px;
+        border-bottom: 1px solid var(--border);
+        font-weight: 600;
+        font-size: 13px;
+      }
+      .napkin-head .dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: var(--accent);
+        margin-right: 6px;
+        display: inline-block;
+      }
+      .napkin-body {
+        padding: 14px;
+      }
+      .code-block {
+        background: var(--bg);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 12px;
+        font-family: ui-monospace, 'Cascadia Code', Consolas, monospace;
+        font-size: 12.5px;
+        overflow-x: auto;
+        position: relative;
+      }
+      .code-block .copy {
+        position: absolute;
+        top: 8px;
+        right: 8px;
+        font-size: 10px;
+        border: 1px solid var(--border);
+        border-radius: 5px;
+        padding: 2px 7px;
+        color: var(--muted);
+        background: var(--panel);
+      }
+      .code-block .k {
+        color: var(--c-system);
+      }
+      .code-block .s {
+        color: var(--ok);
+      }
+      .code-block .c {
+        color: var(--muted);
+      }
+      .napkin-chips {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        margin-top: 12px;
+      }
+      .napkin-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        padding: 4px 11px;
+        font-size: 12px;
+        background: var(--bg);
+      }
+      .napkin-chip .kind {
+        color: var(--muted);
+        font-size: 10px;
+      }
+      .ask-choices {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        margin-top: 12px;
+      }
+      .ask-choices button {
+        text-align: left;
+        border: 1px solid var(--border);
+        background: var(--bg);
+        color: var(--text);
+        border-radius: 8px;
+        padding: 9px 12px;
+        font: inherit;
+        font-size: 13px;
+        cursor: pointer;
+      }
+      .ask-choices button:hover {
+        border-color: var(--accent);
+      }
+
+      /* Pitchers */
+      .pitcher-row {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        background: var(--panel);
+        padding: 14px 16px;
+        margin-top: 12px;
+      }
+      .pitcher-icon {
+        font-size: 22px;
+        flex: 0 0 auto;
+      }
+      .pitcher-row .meta {
+        flex: 1;
+        min-width: 0;
+      }
+      .pitcher-row .meta b {
+        display: block;
+        font-size: 14px;
+      }
+      .pitcher-row .meta span {
+        font-size: 12.5px;
+        color: var(--muted);
+      }
+      .trigger-tag {
+        font-size: 11px;
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        padding: 2px 9px;
+        color: var(--muted);
+        white-space: nowrap;
+      }
+      .switch {
+        width: 38px;
+        height: 22px;
+        border-radius: 999px;
+        background: var(--accent);
+        position: relative;
+        flex: 0 0 auto;
+      }
+      .switch::after {
+        content: '';
+        position: absolute;
+        top: 2px;
+        right: 2px;
+        width: 18px;
+        height: 18px;
+        border-radius: 50%;
+        background: var(--on-accent);
+      }
+      .switch.off {
+        background: var(--border);
+      }
+      .switch.off::after {
+        left: 2px;
+        right: auto;
+        background: var(--muted);
+      }
+
+      /* Context donut */
+      .usage-pop {
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        background: var(--panel);
+        padding: 18px;
+        max-width: 300px;
+      }
+      .usage-top {
+        display: flex;
+        align-items: center;
+        gap: 18px;
+        margin-bottom: 14px;
+      }
+      .donut {
+        width: 96px;
+        height: 96px;
+        border-radius: 50%;
+        flex: 0 0 auto;
+        display: grid;
+        place-items: center;
+      }
+      .donut-hole {
+        width: 68%;
+        height: 68%;
+        border-radius: 50%;
+        background: var(--panel);
+        display: grid;
+        place-items: center;
+      }
+      .donut-hole b {
+        font-size: 21px;
+      }
+      .usage-legend {
+        display: grid;
+        gap: 7px;
+        margin-top: 4px;
+      }
+      .usage-li {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 12.5px;
+      }
+      .usage-li .sw {
+        width: 10px;
+        height: 10px;
+        border-radius: 3px;
+      }
+      .usage-li em {
+        margin-left: auto;
+        color: var(--muted);
+        font-style: normal;
+      }
+
+      /* model list */
+      .model-row {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        background: var(--panel);
+        padding: 11px 14px;
+        margin-top: 10px;
+      }
+      .model-row .cpu {
+        color: var(--accent);
+        font-size: 16px;
+      }
+      .model-row .name {
+        flex: 1;
+        font-size: 13.5px;
+        font-family: ui-monospace, Consolas, monospace;
+      }
+      .model-row .badge {
+        font-size: 11px;
+        border-radius: 999px;
+        padding: 2px 9px;
+        border: 1px solid var(--border);
+        color: var(--muted);
+      }
+      .model-row .badge.on {
+        color: var(--ok);
+        border-color: var(--ok);
+      }
+      .dl-bar {
+        height: 5px;
+        border-radius: 999px;
+        background: var(--border);
+        overflow: hidden;
+        width: 90px;
+      }
+      .dl-bar i {
+        display: block;
+        height: 100%;
+        background: var(--accent);
+      }
+      .model-search {
+        width: 100%;
+        background: var(--bg);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        color: var(--text);
+        padding: 9px 12px;
+        font: inherit;
+        font-size: 13px;
+        margin-bottom: 6px;
+      }
+
+      /* architecture diagram */
+      .arch {
+        display: grid;
+        grid-template-columns: 1fr auto 1fr auto 1fr;
+        align-items: center;
+        gap: 10px;
+        margin-top: 30px;
+      }
+      .arch-node {
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        background: var(--panel);
+        padding: 18px 16px;
+        text-align: center;
+      }
+      .arch-node .ico {
+        font-size: 26px;
+      }
+      .arch-node b {
+        display: block;
+        margin: 8px 0 4px;
+        font-size: 14px;
+      }
+      .arch-node span {
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .arch-arrow {
+        color: var(--accent);
+        font-size: 20px;
+        text-align: center;
+      }
+      @media (max-width: 720px) {
+        .arch {
+          grid-template-columns: 1fr;
+        }
+        .arch-arrow {
+          transform: rotate(90deg);
+        }
+      }
+
+      .callout {
+        border: 1px solid var(--border);
+        border-left: 3px solid var(--accent);
+        border-radius: 8px;
+        background: var(--accent-soft);
+        padding: 14px 16px;
+        font-size: 14px;
+        margin-top: 22px;
+        color: var(--text);
+      }
+
+      /* CTA final */
+      .final {
+        text-align: center;
+        max-width: 760px;
+      }
+      .final .hero-logo {
+        width: 76px;
+        height: 76px;
+      }
+
+      footer {
+        border-top: 1px solid var(--border);
+        text-align: center;
+        padding: 40px 24px 60px;
+        color: var(--muted);
+        font-size: 13px;
+      }
+      footer .brand-mini {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        font-weight: 700;
+        color: var(--text);
+        margin-bottom: 8px;
+      }
+      footer .brand-mini svg {
+        width: 22px;
+        height: 22px;
+      }
+
+      .kbd {
+        font-family: ui-monospace, Consolas, monospace;
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 5px;
+        padding: 1px 6px;
+        font-size: 12px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="backdrop"></div>
+    <div class="progress" id="progress"></div>
+
+    <!-- Floating page nav -->
+    <nav class="pagenav">
+      <span class="brand-mini">
+        <svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <rect x="4" y="4" width="56" height="56" rx="14" fill="#f5c542" />
+          <path d="M4 18 H60 V24 H4 Z" fill="#e05a5a" />
+          <path d="M12 18 V24 M24 18 V24 M36 18 V24 M48 18 V24" stroke="#ffffff" stroke-width="4" />
+          <path d="M20 31 V50 H31" fill="none" stroke="#1a1a1e" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" />
+          <path d="M46 35 C46 31 36 31 36 36 C36 40 46 40 46 45 C46 50 36 50 36 46" fill="none" stroke="#1a1a1e" stroke-width="5" stroke-linecap="round" />
+        </svg>
+        Lemonade Stand
+      </span>
+      <button class="theme-toggle" id="themeToggle" aria-label="Toggle theme">🌙</button>
+    </nav>
+
+    <!-- Section dot rail -->
+    <div class="dotrail" id="dotrail"></div>
+
+    <!-- =================== HERO =================== -->
+    <section class="hero" id="s-hero">
+      <div class="hero-badge reveal"><span class="pip"></span> On-device • MCP client • AI harness</div>
+      <svg class="hero-logo reveal d1" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" aria-label="Lemonade Stand logo">
+        <rect x="4" y="4" width="56" height="56" rx="14" fill="#f5c542" />
+        <path d="M4 18 H60 V24 H4 Z" fill="#e05a5a" />
+        <path d="M12 18 V24 M24 18 V24 M36 18 V24 M48 18 V24" stroke="#ffffff" stroke-width="4" />
+        <path d="M20 31 V50 H31" fill="none" stroke="#1a1a1e" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" />
+        <path d="M46 35 C46 31 36 31 36 36 C36 40 46 40 46 45 C46 50 36 50 36 46" fill="none" stroke="#1a1a1e" stroke-width="5" stroke-linecap="round" />
+      </svg>
+      <h1 class="reveal d1"><span class="lemon">Lemonade</span> <span class="stand">Stand</span></h1>
+      <p class="lead reveal d2">
+        A desktop <strong>MCP client &amp; agent host</strong> that drives local models served by
+        <code>lemond</code>. Stock tools, watch the agent think and keep every token on your machine.
+      </p>
+      <div class="cta-row reveal d3">
+        <a class="btn secondary" href="https://github.com/siavashhub/lemonade-stand/releases" target="_blank" rel="noopener">Download</a>
+        <a class="btn white" href="#s-what">Take the tour ↓</a>
+        <a class="btn primary" href="https://github.com/lemonade-sdk/lemonade" target="_blank" rel="noopener">About Lemonade ↗</a>
+      </div>
+      <div class="stat-row reveal d3">
+        <div class="stat"><b>100%</b><span>on-device inference</span></div>
+        <div class="stat"><b>7+</b><span>tool servers in the Pantry</span></div>
+        <div class="stat"><b>MCP</b><span>stdio &amp; Streamable HTTP</span></div>
+      </div>
+      <div class="scrollcue">Scroll to explore ↓</div>
+    </section>
+
+    <!-- =================== WHAT IS IT =================== -->
+    <section id="s-what">
+      <div class="reveal">
+        <span class="eyebrow">What it is</span>
+        <h2>A local agent that turns your model into a doer.</h2>
+        <p class="lead">
+          Lemonade Stand wires a local language model to real tools over the Model Context Protocol.
+          The <strong>main process</strong> runs the tool-calling loop and talks to <code>lemond</code>; the
+          <strong>renderer</strong> streams the agent's thinking and every tool action into a live chat.
+        </p>
+      </div>
+
+      <div class="arch reveal d1">
+        <div class="arch-node">
+          <div class="ico">💬</div>
+          <b>Renderer (React)</b>
+          <span>Chat UI, streams reasoning &amp; tool activity</span>
+        </div>
+        <div class="arch-arrow">⇄</div>
+        <div class="arch-node">
+          <div class="ico">⚙️</div>
+          <b>Main (Node)</b>
+          <span>Agent loop • MCP manager • approvals</span>
+        </div>
+        <div class="arch-arrow">⇄</div>
+        <div class="arch-node">
+          <div class="ico">🍋</div>
+          <b>lemond</b>
+          <span>Local model runtime + <code>/mcp</code> gateway</span>
+        </div>
+      </div>
+
+      <div class="callout reveal d2">
+        The agent can treat <strong>lemond's own <code>/mcp</code> gateway</strong> as just another MCP server,
+        so chat, multimodal "omni", image generation and transcription tools show up right alongside
+        third-party ones.
+      </div>
+    </section>
+
+    <!-- =================== CHAT + REASONING =================== -->
+    <section id="s-chat">
+      <div class="grid2">
+        <div class="copy reveal">
+          <span class="eyebrow">Chat &amp; reasoning</span>
+          <h2>Watch the agent think out loud.</h2>
+          <p class="lead">
+            Chat turns and tool calls share one streaming transcript, so you can follow the agent's
+            reasoning, see which tools it reaches for, and read results as they arrive.
+          </p>
+          <ul class="feature-list">
+            <li><span class="fi">🧠</span><div><b>Reasoning surface</b><span>Live "thinking" for models that support it.</span></div></li>
+            <li><span class="fi">🔧</span><div><b>Inline tool trace</b><span>Every call and result rendered in the stream.</span></div></li>
+            <li><span class="fi">📎</span><div><b>File processing</b><span>Paste or drag-drop files straight into a turn.</span></div></li>
+          </ul>
+        </div>
+        <div class="reveal d1">
+          <div class="window tilt">
+            <div class="topbar">
+              <span class="brand">
+                <svg viewBox="0 0 64 64"><rect x="4" y="4" width="56" height="56" rx="14" fill="#f5c542"/><path d="M4 18 H60 V24 H4 Z" fill="#e05a5a"/><path d="M12 18 V24 M24 18 V24 M36 18 V24 M48 18 V24" stroke="#fff" stroke-width="4"/><path d="M20 31 V50 H31" fill="none" stroke="#1a1a1e" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/><path d="M46 35 C46 31 36 31 36 36 C36 40 46 40 46 45 C46 50 36 50 36 46" fill="none" stroke="#1a1a1e" stroke-width="5" stroke-linecap="round"/></svg>
+                Lemonade Stand
+              </span>
+              <div class="winctl"><i></i><i></i><i></i></div>
+            </div>
+            <div class="transcript">
+              <div class="line user"><div class="role">you</div><div class="bubble">Summarize notes.md and save a TODO list next to it.</div></div>
+              <div class="reasoning"><b>Reasoning</b><br />I'll read the file first, extract action items, then write todo.md in the same folder.</div>
+              <div class="line tool"><span class="tool-label">filesystem → read_file</span><span class="tool-detail">notes.md · 1.2 KB</span></div>
+              <div class="line tool"><span class="tool-label">filesystem → write_file</span><span class="tool-detail">todo.md · created ✓</span></div>
+              <div class="line"><div class="role">agent</div><div class="bubble">Done! I pulled 3 action items into <b>todo.md</b> right beside your notes. Want me to prioritize them?</div></div>
+              <div class="thinking"><span class="thinking-lemon">🍋</span><span>Squeezing the freshest tokens…</span></div>
+            </div>
+            <div class="composer">
+              <textarea readonly>What do you need help with?</textarea>
+              <button class="mic-btn">🎙️</button>
+              <button class="send-btn">↑</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- =================== APPROVALS + SECURITY =================== -->
+    <section id="s-approvals">
+      <div class="grid2 rev">
+        <div class="copy reveal">
+          <span class="eyebrow">Safety by default</span>
+          <h2>Nothing runs without your say-so.</h2>
+          <p class="lead">
+            Before any tool executes you get an approval card showing the exact server, tool, and
+            arguments. Choose <strong>Allow once</strong>, <strong>Always allow</strong> for the session, or
+            <strong>Deny</strong>, or flip on session-wide bypass when you're moving fast.
+          </p>
+          <ul class="feature-list">
+            <li><span class="fi">🛡️</span><div><b>Per-call approval</b><span>Review args before anything touches your machine.</span></div></li>
+            <li><span class="fi">⚡</span><div><b>Bypass toggle</b><span>Session-scoped fast lane, cleared on restart.</span></div></li>
+            <li><span class="fi">🔒</span><div><b>Trusted by design</b><span>Servers run with the app's privileges, you gate them.</span></div></li>
+          </ul>
+        </div>
+        <div class="reveal d1">
+          <div class="approval">
+            <div class="approval-head">Allow <span class="approval-tool">filesystem → write_file</span> to run?</div>
+            <pre class="approval-args">{
+  "path": "C:\\notes\\todo.md",
+  "content": "# TODO\n- Restock lemons\n- Fix the squeaky sign"
+}</pre>
+            <div class="approval-actions">
+              <button class="ok">Allow once</button>
+              <button class="always">Always allow</button>
+              <button class="deny">Deny</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- =================== THE PANTRY =================== -->
+    <section id="s-pantry">
+      <div class="reveal">
+        <span class="eyebrow">The Pantry</span>
+        <h2>Stock the agent's tools from the Market.</h2>
+        <p class="lead">
+          The Pantry is where you enable MCP servers, each one adds a batch of tools the agent can call.
+          Pick a server, point it at a folder or file if it needs one and restart to load its tools.
+        </p>
+      </div>
+      <div class="pantry-grid">
+        <div class="pantry-card reveal">
+          <div class="emoji">🍋</div>
+          <h4>Lemonade Gateway <code>lemonade</code></h4>
+          <p>Your local <code>lemond</code>'s own tools: chat, omni, images, transcription.</p>
+          <div class="toolchips"><span>chat</span><span>omni</span><span>generate_image</span><span>transcribe</span></div>
+          <div style="margin-top:12px"><span class="stock">✓ Stocked</span></div>
+        </div>
+        <div class="pantry-card reveal d1">
+          <div class="emoji">📁</div>
+          <h4>Filesystem <code>filesystem</code></h4>
+          <p>Read &amp; write files under one root folder you choose.</p>
+          <div class="toolchips"><span>read_file</span><span>write_file</span><span>edit_file</span><span>search_files</span></div>
+          <div style="margin-top:12px"><span class="stock">＋ Stock it</span></div>
+        </div>
+        <div class="pantry-card reveal d2">
+          <div class="emoji">🌐</div>
+          <h4>Web Fetch <code>fetch</code></h4>
+          <p>Fetch a URL and convert the page to clean markdown.</p>
+          <div class="toolchips"><span>fetch</span></div>
+          <div style="margin-top:12px"><span class="stock">＋ Stock it</span></div>
+        </div>
+        <div class="pantry-card reveal">
+          <div class="emoji">🔀</div>
+          <h4>Git <code>git</code></h4>
+          <p>Status, diffs, log, and commits on a local repo.</p>
+          <div class="toolchips"><span>git_status</span><span>git_diff</span><span>git_log</span><span>git_commit</span></div>
+          <div style="margin-top:12px"><span class="stock">＋ Stock it</span></div>
+        </div>
+        <div class="pantry-card reveal d1">
+          <div class="emoji">🧠</div>
+          <h4>Memory <code>memory</code></h4>
+          <p>A persistent knowledge graph the agent recalls across restarts.</p>
+          <div class="toolchips"><span>create_entities</span><span>search_nodes</span><span>read_graph</span></div>
+          <div style="margin-top:12px"><span class="stock">＋ Stock it</span></div>
+        </div>
+        <div class="pantry-card reveal d2">
+          <div class="emoji">⏰</div>
+          <h4>Time <code>time</code></h4>
+          <p>Current time plus timezone conversions.</p>
+          <div class="toolchips"><span>get_current_time</span><span>convert_time</span></div>
+          <div style="margin-top:12px"><span class="stock">＋ Stock it</span></div>
+        </div>
+        <div class="pantry-card reveal">
+          <div class="emoji">🗃️</div>
+          <h4>SQLite <code>sqlite</code></h4>
+          <p>Query and modify a local SQLite database file.</p>
+          <div class="toolchips"><span>read_query</span><span>write_query</span><span>list_tables</span></div>
+          <div style="margin-top:12px"><span class="stock">＋ Stock it</span></div>
+        </div>
+        <div class="pantry-card reveal d1" style="display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center;border-style:dashed">
+          <div class="emoji">➕</div>
+          <h4 style="justify-content:center">Bring your own</h4>
+          <p>Any stdio or Streamable-HTTP MCP server works. Add it to <code>servers.json</code>.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- =================== THE NAPKIN =================== -->
+    <section id="s-napkin">
+      <div class="grid2">
+        <div class="copy reveal">
+          <span class="eyebrow">The Napkin</span>
+          <h2>Rich artifacts, jotted on the side.</h2>
+          <p class="lead">
+            A docked side panel that enriches replies with real artifacts, code with a Copy button,
+            rendered Markdown, Mermaid diagrams, SVG drawings, and images. Every bit of model-authored
+            markup is sanitized before it renders.
+          </p>
+          <ul class="feature-list">
+            <li><span class="fi">🖊️</span><div><b><code>show_napkin</code></b><span>Non-blocking, display any artifact type.</span></div></li>
+            <li><span class="fi">❓</span><div><b><code>ask_napkin</code></b><span>Blocking multiple-choice clarifications as buttons.</span></div></li>
+            <li><span class="fi">📌</span><div><b>Reopenable chips</b><span>Napkins persist in the transcript &amp; restore with a saved chat.</span></div></li>
+            <li><span class="fi">📂</span><div><b>Open folder</b><span>Jump straight to files the agent wrote to disk.</span></div></li>
+          </ul>
+        </div>
+        <div class="reveal d1">
+          <div class="napkin">
+            <div class="napkin-head"><span><span class="dot"></span>Napkin, lemonade.py</span><span style="color:var(--muted);font-size:11px">code · python</span></div>
+            <div class="napkin-body">
+              <div class="code-block">
+                <span class="copy">Copy</span>
+<span class="c"># fresh-squeezed pricing</span>
+<span class="k">def</span> price(cups, cents=<span class="s">50</span>):
+    <span class="k">return</span> cups * cents / <span class="s">100</span>
+
+<span class="k">print</span>(<span class="s">f"${price(12):.2f}"</span>)
+              </div>
+              <div class="ask-choices">
+                <div style="font-size:12px;color:var(--muted)">ask_napkin · Which theme should the sign use?</div>
+                <button>🍋 Classic Amber</button>
+                <button>🌿 Mint Stand</button>
+              </div>
+              <div class="napkin-chips">
+                <span class="napkin-chip">🖊️ pricing.py <span class="kind">code</span></span>
+                <span class="napkin-chip">📊 flow <span class="kind">mermaid</span></span>
+                <span class="napkin-chip">🖼️ sign <span class="kind">image</span></span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- =================== PITCHERS =================== -->
+    <section id="s-pitchers">
+      <div class="reveal">
+        <span class="eyebrow">Pitchers</span>
+        <h2>Scheduled tasks, poured fresh.</h2>
+        <p class="lead">
+          Pitchers run prompts on a timer or when the app opens, no babysitting. Each pour uses a
+          per-task tool whitelist so scheduled runs can't be steered into unintended actions.
+        </p>
+      </div>
+      <div style="margin-top:6px">
+        <div class="pitcher-row reveal">
+          <div class="pitcher-icon">🫗</div>
+          <div class="meta"><b>Morning stand report</b><span>Summarize overnight sales from the SQLite DB → Napkin</span></div>
+          <span class="trigger-tag">Daily · 08:00</span>
+          <div class="switch"></div>
+        </div>
+        <div class="pitcher-row reveal d1">
+          <div class="pitcher-icon">🫗</div>
+          <div class="meta"><b>Fetch competitor prices</b><span>Fetch two pages, compare, save as a conversation</span></div>
+          <span class="trigger-tag">On open</span>
+          <div class="switch"></div>
+        </div>
+        <div class="pitcher-row reveal d2">
+          <div class="pitcher-icon">🫗</div>
+          <div class="meta"><b>Weekly inventory memo</b><span>Currently paused</span></div>
+          <span class="trigger-tag">Daily · 18:00</span>
+          <div class="switch off"></div>
+        </div>
+      </div>
+      <ul class="feature-list reveal d2" style="grid-template-columns:1fr 1fr;display:grid">
+        <li><span class="fi">🎯</span><div><b>Tool whitelist</b><span>Only allowed tools auto-run during a pour.</span></div></li>
+        <li><span class="fi">🔁</span><div><b>Bounded retry</b><span>Flaky tool call? A pour retries once.</span></div></li>
+        <li><span class="fi">🔔</span><div><b>Desktop notifications</b><span>Pinged when results are ready &amp; unfocused.</span></div></li>
+        <li><span class="fi">⏳</span><div><b>Catch-up on launch</b><span>Missed daily runs fire when you reopen.</span></div></li>
+      </ul>
+    </section>
+
+    <!-- =================== VOICE =================== -->
+    <section id="s-voice">
+      <div class="grid2 rev">
+        <div class="copy reveal">
+          <span class="eyebrow">Voice</span>
+          <h2>Talk to it. Let it talk back.</h2>
+          <p class="lead">
+            Tap the mic to dictate, audio is transcribed locally through <code>lemond</code>'s Whisper
+            endpoint. Flip the speaker on and the agent reads its replies aloud with text-to-speech.
+          </p>
+          <ul class="feature-list">
+            <li><span class="fi">🎙️</span><div><b>Speech to text</b><span>Recorded audio re-encoded to 16 kHz mono WAV on device.</span></div></li>
+            <li><span class="fi">🔊</span><div><b>Spoken replies</b><span>Toggle TTS from the top bar or footer.</span></div></li>
+          </ul>
+        </div>
+        <div class="reveal d1">
+          <div class="window">
+            <div class="composer" style="border-top:none">
+              <textarea readonly>Listening… click the mic again to stop</textarea>
+              <button class="mic-btn" style="border-color:var(--accent);color:var(--accent)">🎙️</button>
+              <button class="send-btn">↑</button>
+            </div>
+            <div class="transcript">
+              <div class="line user"><div class="role">you · spoken</div><div class="bubble">What time do we open on Saturday?</div></div>
+              <div class="line"><div class="role">agent · 🔊 speaking</div><div class="bubble">The Sour Spot opens at 9 AM on Saturdays. Want me to set a reminder?</div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- =================== MODELS + CONTEXT =================== -->
+    <section id="s-models">
+      <div class="grid2">
+        <div class="copy reveal">
+          <span class="eyebrow">Models &amp; context</span>
+          <h2>Manage models. Mind the budget.</h2>
+          <p class="lead">
+            Download, load, and uninstall models without leaving the app, and filter a long list with
+            model search. A live context-usage donut breaks down exactly where your window is going.
+          </p>
+          <ul class="feature-list">
+            <li><span class="fi">⬇️</span><div><b>Download &amp; uninstall</b><span>Manage models right from Lemonade Stand.</span></div></li>
+            <li><span class="fi">🔎</span><div><b>Model search</b><span>Filter the catalog as you type.</span></div></li>
+            <li><span class="fi">🧮</span><div><b>Editable context size</b><span>Set the window; watch the breakdown update.</span></div></li>
+          </ul>
+        </div>
+        <div class="reveal d1">
+          <input class="model-search" value="qwen" readonly />
+          <div class="model-row">
+            <span class="cpu">🖥️</span><span class="name">Qwen2.5-7B-Instruct</span><span class="badge on">● loaded</span>
+          </div>
+          <div class="model-row">
+            <span class="cpu">🖥️</span><span class="name">Qwen2.5-Coder-3B</span>
+            <div class="dl-bar"><i style="width:62%"></i></div><span class="badge">↓ 62%</span>
+          </div>
+          <div style="margin-top:22px" class="usage-pop">
+            <div class="usage-top">
+              <div class="donut" id="donut">
+                <div class="donut-hole"><b>41%</b></div>
+              </div>
+              <div>
+                <div style="font-size:15px;font-weight:700">3,340 / 8,192</div>
+                <div style="font-size:12px;color:var(--muted)">tokens used</div>
+              </div>
+            </div>
+            <div class="usage-legend">
+              <div class="usage-li"><span class="sw" style="background:var(--c-system)"></span>System<em>620</em></div>
+              <div class="usage-li"><span class="sw" style="background:var(--c-tools)"></span>Tools<em>880</em></div>
+              <div class="usage-li"><span class="sw" style="background:var(--c-messages)"></span>Messages<em>1,240</em></div>
+              <div class="usage-li"><span class="sw" style="background:var(--c-results)"></span>Results<em>600</em></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- =================== HISTORY + THEMES =================== -->
+    <section id="s-more">
+      <div class="reveal">
+        <span class="eyebrow">And the little things</span>
+        <h2>History, plans and more to pour it into.</h2>
+      </div>
+      <div class="pantry-grid" style="grid-template-columns:repeat(auto-fill,minmax(240px,1fr))">
+        <div class="pantry-card reveal">
+          <div class="emoji">🗂️</div>
+          <h4>Conversation history</h4>
+          <p>Every session saves automatically. Reopen any past chat and pick up right where you left off.</p>
+        </div>
+        <div class="pantry-card reveal d1">
+          <div class="emoji">🗺️</div>
+          <h4>Plan bar</h4>
+          <p>When the agent plans multi-step work, a collapsible progress bar tracks each step to done.</p>
+        </div>
+        <div class="pantry-card reveal d2">
+          <div class="emoji">🗃️</div>
+          <h4>Model Management</h4>
+          <p>Manage your models directly from the app, including downloading, loading and uninstalling them.</p>
+        </div>
+        <div class="pantry-card reveal">
+          <div class="emoji">📦</div>
+          <h4>Bundled runtimes</h4>
+          <p>Ships a bundled <code>uv</code> and a Node resolver so many MCP servers work without extra installs.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- =================== FINAL CTA =================== -->
+    <section id="s-cta" class="final" style="margin:0 auto;text-align:center">
+      <div class="reveal" style="display:flex;flex-direction:column;align-items:center">
+        <svg class="hero-logo" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <rect x="4" y="4" width="56" height="56" rx="14" fill="#f5c542" />
+          <path d="M4 18 H60 V24 H4 Z" fill="#e05a5a" />
+          <path d="M12 18 V24 M24 18 V24 M36 18 V24 M48 18 V24" stroke="#ffffff" stroke-width="4" />
+          <path d="M20 31 V50 H31" fill="none" stroke="#1a1a1e" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" />
+          <path d="M46 35 C46 31 36 31 36 36 C36 40 46 40 46 45 C46 50 36 50 36 46" fill="none" stroke="#1a1a1e" stroke-width="5" stroke-linecap="round" />
+        </svg>
+        <h2>Pour yourself a local agent.</h2>
+        <p class="lead" style="margin:0 auto 8px">
+          Point it at a running <code>lemond</code> server, stock a few tools, and start talking. Your
+          data and your tokens never leave the machine.
+        </p>
+        <div class="cta-row">
+          <a class="btn" href="#s-hero">Back to top ↑</a>
+        </div>
+      </div>
+    </section>
+
+    <footer>
+      <div class="brand-mini">
+        <svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <rect x="4" y="4" width="56" height="56" rx="14" fill="#f5c542" />
+          <path d="M4 18 H60 V24 H4 Z" fill="#e05a5a" />
+          <path d="M12 18 V24 M24 18 V24 M36 18 V24 M48 18 V24" stroke="#ffffff" stroke-width="4" />
+          <path d="M20 31 V50 H31" fill="none" stroke="#1a1a1e" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" />
+          <path d="M46 35 C46 31 36 31 36 36 C36 40 46 40 46 45 C46 50 36 50 36 46" fill="none" stroke="#1a1a1e" stroke-width="5" stroke-linecap="round" />
+        </svg>
+        Lemonade Stand
+      </div>
+      <div>On-device · MCP client · AI harness a showcase page. Not affiliated endorsement implied by the Lemonade project.</div>
+    </footer>
+
+    <script>
+      // ---- Scroll progress bar ----
+      const progress = document.getElementById('progress');
+      function updateProgress() {
+        const h = document.documentElement;
+        const scrolled = h.scrollTop / (h.scrollHeight - h.clientHeight);
+        progress.style.width = Math.min(100, scrolled * 100) + '%';
+      }
+      window.addEventListener('scroll', updateProgress, { passive: true });
+      updateProgress();
+
+      // ---- Reveal-on-scroll ("infinite scroll" section reveals) ----
+      const io = new IntersectionObserver(
+        (entries) => {
+          entries.forEach((e) => {
+            if (e.isIntersecting) {
+              e.target.classList.add('in');
+              io.unobserve(e.target);
+            }
+          });
+        },
+        { threshold: 0.15, rootMargin: '0px 0px -60px 0px' }
+      );
+      document.querySelectorAll('.reveal').forEach((el) => io.observe(el));
+
+      // ---- Theme toggle (mirrors the app's data-theme switch) ----
+      const root = document.documentElement;
+      const toggle = document.getElementById('themeToggle');
+      function applyThemeIcon() {
+        toggle.textContent = root.getAttribute('data-theme') === 'light' ? '☀️' : '🌙';
+      }
+      toggle.addEventListener('click', () => {
+        const next = root.getAttribute('data-theme') === 'light' ? 'dark' : 'light';
+        root.setAttribute('data-theme', next);
+        applyThemeIcon();
+      });
+      applyThemeIcon();
+
+      // ---- Context donut ring (conic-gradient like the app) ----
+      (function paintDonut() {
+        const donut = document.getElementById('donut');
+        if (!donut) return;
+        const track = getComputedStyle(root).getPropertyValue('--border').trim() || '#3a5560';
+        const segs = [
+          ['--c-system', 620],
+          ['--c-tools', 880],
+          ['--c-messages', 1240],
+          ['--c-results', 600]
+        ];
+        const total = 8192;
+        let acc = 0;
+        const stops = [];
+        segs.forEach(([varName, val]) => {
+          const color = getComputedStyle(root).getPropertyValue(varName).trim();
+          const start = (acc / total) * 360;
+          acc += val;
+          const end = (acc / total) * 360;
+          stops.push(`${color} ${start}deg ${end}deg`);
+        });
+        const usedEnd = (acc / total) * 360;
+        stops.push(`#3a5560 ${usedEnd}deg 360deg`);
+        donut.style.background = `conic-gradient(${stops.join(',')})`;
+      })();
+
+      // ---- Left dot rail: build + sync active section ----
+      const sections = Array.from(document.querySelectorAll('section[id]'));
+      const rail = document.getElementById('dotrail');
+      sections.forEach((sec) => {
+        const b = document.createElement('button');
+        b.title = sec.id.replace('s-', '');
+        b.addEventListener('click', () =>
+          sec.scrollIntoView({ behavior: 'smooth', block: 'start' })
+        );
+        rail.appendChild(b);
+      });
+      const dots = Array.from(rail.children);
+      const railIO = new IntersectionObserver(
+        (entries) => {
+          entries.forEach((e) => {
+            if (e.isIntersecting) {
+              const idx = sections.indexOf(e.target);
+              dots.forEach((d, i) => d.classList.toggle('active', i === idx));
+            }
+          });
+        },
+        { threshold: 0.5 }
+      );
+      sections.forEach((s) => railIO.observe(s));
+    </script>
+  </body>
+</html>
