@@ -77,6 +77,38 @@ export interface ContextBudget {
   source: ContextInfo['source']
 }
 
+// Whether any message carries an inline image part (multimodal content array).
+// Used to skip the vision-capability lookup entirely for the common all-text case.
+function messagesHaveImages(messages: ChatCompletionMessageParam[]): boolean {
+  return messages.some(
+    (m) =>
+      Array.isArray(m.content) &&
+      m.content.some((part) => (part as { type?: string }).type === 'image_url')
+  )
+}
+
+// Replace a message's inline image parts with a short text note, flattening the
+// content back to a plain string. Sent to text-only models so the request stays
+// valid (no "image input is not supported" 500) while the model is still told an
+// image was attached and why it can't see it. Non-multimodal messages pass through.
+function stripImageContent(message: ChatCompletionMessageParam): ChatCompletionMessageParam {
+  if (!Array.isArray(message.content)) return message
+  let removed = 0
+  const texts: string[] = []
+  for (const part of message.content) {
+    if ((part as { type?: string }).type === 'image_url') removed++
+    else if ((part as { type?: string }).type === 'text')
+      texts.push((part as { text: string }).text)
+  }
+  if (removed === 0) return message
+  const note =
+    `[${removed} image attachment${removed === 1 ? '' : 's'} omitted: the current model can't ` +
+    `view images. Load a vision-capable model to analyze pictures.]`
+  const body = texts.filter(Boolean).join('\n')
+  const content = (body ? `${body}\n\n` : '') + note
+  return { ...message, content } as ChatCompletionMessageParam
+}
+
 // Thin wrapper over the OpenAI SDK pointed at a running lemond. Lemonade
 // implements the OpenAI-compatible surface under /api/v1, so the stock SDK
 // works unchanged; we only supply baseURL + (optional) apiKey.
@@ -98,6 +130,11 @@ export class LemonadeClient {
   // Cached id of a server-served transcription model, resolved lazily on the
   // first transcribe() call so a stale/renamed model can't silently break it.
   private cachedTranscriptionModel?: string
+  // Cached per-model vision capability (id -> supports image input), populated
+  // whenever listModels() runs. Lets chat() strip inline images before sending
+  // them to a text-only model, which would otherwise 500 with "image input is
+  // not supported" and abort the whole turn.
+  private visionCapable = new Map<string, boolean>()
 
   constructor(
     baseURL: string,
@@ -315,6 +352,10 @@ export class LemonadeClient {
       // tags these entries with recipe 'collection.omni'. They're multimodal
       // and well-suited to agentic use.
       const omni = e.recipe === 'collection.omni'
+      // Vision-capable models advertise the 'vision' label (they ship an mmproj
+      // projector); Omni routers bundle a vision component. Cache this so chat()
+      // can avoid sending images to a model that can't accept them.
+      if (e.id) this.visionCapable.set(e.id, omni || labels.includes('vision'))
       // Infer a coarse modality from labels for grouping in the UI. Omni models
       // are treated as chat models so they surface in the agent's model list.
       const type = omni
@@ -781,16 +822,43 @@ export class LemonadeClient {
    * so the dropped connection is detected on the next token and generation
    * stops promptly when the user hits stop.
    */
+  /**
+   * Whether `id` is the id of a model that accepts image input, using the cache
+   * populated by listModels(). On a cache miss it refreshes the model list once
+   * (which fills the cache) before answering. Defaults to false when the answer
+   * can't be determined, so images are stripped rather than risking a 500.
+   */
+  private async modelSupportsVision(id: string): Promise<boolean> {
+    if (!id) return false
+    const cached = this.visionCapable.get(id)
+    if (cached !== undefined) return cached
+    try {
+      await this.listModels()
+    } catch {
+      // Best-effort; fall through to the default below.
+    }
+    return this.visionCapable.get(id) ?? false
+  }
+
   async chat(
     messages: ChatCompletionMessageParam[],
     tools: ChatCompletionTool[],
     signal?: AbortSignal,
     onReasoning?: (delta: string) => void
   ): Promise<OpenAI.Chat.Completions.ChatCompletion.Choice> {
+    // Text-only models reject inline images with a 500 that aborts the turn. If
+    // any message carries an image and the loaded model can't see images, strip
+    // the image parts and leave a note so the request stays valid and the model
+    // can explain the limitation instead of the request failing outright.
+    const outgoing = messagesHaveImages(messages)
+      ? (await this.modelSupportsVision(this.model))
+        ? messages
+        : messages.map(stripImageContent)
+      : messages
     const stream = this.client.beta.chat.completions.stream(
       {
         model: this.model,
-        messages,
+        messages: outgoing,
         tools: tools.length > 0 ? tools : undefined,
         tool_choice: tools.length > 0 ? 'auto' : undefined
       },

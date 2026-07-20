@@ -1,6 +1,6 @@
 {
   "name": "lemonade-stand",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "A desktop MCP client / agent host that drives local models served by Lemonade (lemond) over HTTP.",
   "author": "",
   "license": "Apache-2.0",
