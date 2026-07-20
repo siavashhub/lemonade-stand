@@ -60,19 +60,19 @@ describe('filesystem MCP server (integration)', () => {
   it('reads the file back through the tool', async () => {
     const target = join(root, 'hello.txt')
     const result = await manager.callTool('filesystem__read_file', { path: target })
-    expect(result).toContain('Fresh lemonade, 50 cents')
+    expect(result.text).toContain('Fresh lemonade, 50 cents')
   })
 
   it('lists the directory and sees the file it wrote', async () => {
     const result = await manager.callTool('filesystem__list_directory', { path: root })
-    expect(result).toContain('hello.txt')
+    expect(result.text).toContain('hello.txt')
   })
 
   it('surfaces tool errors instead of throwing (reading a missing file)', async () => {
     const result = await manager.callTool('filesystem__read_file', {
       path: join(root, 'does-not-exist.txt')
     })
-    expect(result.toLowerCase()).toContain('error')
+    expect(result.text.toLowerCase()).toContain('error')
   })
 
   it('rejects an unknown qualified tool name', async () => {

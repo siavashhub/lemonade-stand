@@ -11,6 +11,19 @@ import type { AgentTool, McpServerConfig } from '@shared/types'
 
 const SEP = '__'
 
+/** An image block produced by an MCP tool, base64-encoded (no `data:` prefix). */
+export interface McpToolImage {
+  data: string
+  mimeType: string
+}
+
+/** The outcome of an MCP tool call: text for the model plus any image blocks
+ * the tool emitted, kept separate so binary bytes don't flood the context. */
+export interface McpToolResult {
+  text: string
+  images: McpToolImage[]
+}
+
 const nodeRequire = createRequire(import.meta.url)
 const HERE = fileURLToPath(new URL('.', import.meta.url))
 
@@ -245,27 +258,41 @@ export class McpManager {
 
   /**
    * Execute a qualified tool call. Returns a text rendering of the tool's
-   * content blocks suitable for feeding back to the model as a tool message.
+   * content blocks (for feeding back to the model as a tool message) plus any
+   * image blocks the tool produced, so the caller can surface them to the user
+   * (e.g. on the Napkin panel) instead of discarding the bytes.
    */
-  async callTool(qualifiedName: string, args: Record<string, unknown>): Promise<string> {
+  async callTool(qualifiedName: string, args: Record<string, unknown>): Promise<McpToolResult> {
     const owner = this.connected.find((c) => c.toolNames.has(qualifiedName))
     if (!owner) throw new Error(`No connected server owns tool "${qualifiedName}"`)
     const originalName = owner.toolNames.get(qualifiedName)!
 
     const result = await owner.client.callTool({ name: originalName, arguments: args })
 
-    // Flatten MCP content blocks to text. Non-text blocks (image/audio) are
-    // summarized rather than inlined , this is a text agent loop; binary media
-    // would blow up the context window.
+    // Flatten MCP content blocks. Text blocks feed the model as usual. Image
+    // blocks would blow up the context window if inlined, so they're pulled out
+    // and returned separately for the caller to display; the model sees a short
+    // placeholder that tells it the image was already shown to the user.
     const blocks = Array.isArray(result.content) ? result.content : []
     const parts: string[] = []
+    const images: McpToolImage[] = []
     for (const block of blocks) {
-      if (block.type === 'text') parts.push(block.text)
-      else parts.push(`[${block.type} content omitted]`)
+      if (block.type === 'text') {
+        parts.push(block.text)
+      } else if (block.type === 'image' && typeof block.data === 'string') {
+        const mimeType =
+          typeof block.mimeType === 'string' && /^image\//i.test(block.mimeType)
+            ? block.mimeType
+            : 'image/png'
+        images.push({ data: block.data, mimeType })
+        parts.push('[image shown to the user on the napkin panel]')
+      } else {
+        parts.push(`[${block.type} content omitted]`)
+      }
     }
     const text = parts.join('\n').trim()
-    if (result.isError) return `Tool error: ${text || 'unknown error'}`
-    return text || '(tool returned no content)'
+    if (result.isError) return { text: `Tool error: ${text || 'unknown error'}`, images }
+    return { text: text || '(tool returned no content)', images }
   }
 
   async closeAll(): Promise<void> {

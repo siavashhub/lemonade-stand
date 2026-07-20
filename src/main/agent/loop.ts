@@ -280,6 +280,52 @@ function extractFolderPathFromToolResult(
   return null
 }
 
+// Weak local models sometimes ignore `show_napkin` and instead dump a base64
+// image straight into their reply, as a Markdown image `![alt](data:image/...)`
+// or a bare `data:image/...;base64,...` URL. That never renders in the chat
+// transcript (and would bloat it with a giant blob), so pull every such image
+// out into a Napkin artifact and return the text with the blobs removed. Any
+// extracted images are surfaced on the napkin panel by the caller.
+function extractInlineImages(text: string): {
+  cleaned: string
+  napkins: Napkin[]
+} {
+  const napkins: Napkin[] = []
+  // Matches an optional Markdown image wrapper around a data: URL, or a bare
+  // data: URL. Captures the alt text (when present), the mime subtype, and the
+  // base64 payload.
+  const pattern =
+    /!\[([^\]]*)\]\(\s*data:image\/([a-z0-9.+-]+);base64,([A-Za-z0-9+/=\s]+?)\s*\)|data:image\/([a-z0-9.+-]+);base64,([A-Za-z0-9+/=]+)/gi
+
+  let cleaned = text.replace(pattern, (_m, alt, mdMime, mdData, bareMime, bareData) => {
+    const mime = (mdMime ?? bareMime) as string
+    const data = ((mdData ?? bareData) as string).replace(/\s+/g, '')
+    if (!data) return ''
+    napkins.push({
+      title: (typeof alt === 'string' && alt.trim()) || `Generated image ${napkins.length + 1}`,
+      kind: 'image',
+      content: data,
+      mimeType: `image/${mime.toLowerCase()}`,
+      alt: typeof alt === 'string' && alt.trim() ? alt.trim() : undefined
+    })
+    return ''
+  })
+
+  if (napkins.length > 0) {
+    // Tidy up whitespace left where the blobs were removed so the reply reads
+    // cleanly (e.g. no empty lines or dangling spaces).
+    cleaned = cleaned.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim()
+    if (!cleaned) {
+      cleaned =
+        napkins.length === 1
+          ? 'Here is the image , see the napkin panel.'
+          : `Here are ${napkins.length} images , see the napkin panel.`
+    }
+  }
+
+  return { cleaned, napkins }
+}
+
 export class Agent {
   constructor(
     private lemonade: LemonadeClient,
@@ -409,7 +455,12 @@ export class Agent {
             continue
           }
           messages.push(stripReasoningForHistory(message, content))
-          emit({ type: 'assistant_text', text: content })
+          // If the model inlined base64 image(s) into its reply instead of using
+          // show_napkin, lift them onto the napkin panel and strip the blobs so
+          // the chat shows a clean message rather than a giant data: URL.
+          const { cleaned, napkins } = extractInlineImages(content)
+          for (const napkin of napkins) emit({ type: 'napkin_show', napkin })
+          emit({ type: 'assistant_text', text: cleaned })
           emit({ type: 'done' })
           return
         }
@@ -826,12 +877,31 @@ export class Agent {
     emit({ type: 'tool_call', server: serverId, tool: toolLabel, args })
 
     let resultText: string
+    let resultImages: { data: string; mimeType: string }[] = []
     let ok = true
     try {
-      resultText = await this.mcp.callTool(qualified, args)
+      const result = await this.mcp.callTool(qualified, args)
+      resultText = result.text
+      resultImages = result.images
     } catch (err) {
       ok = false
       resultText = `Tool call failed: ${err instanceof Error ? err.message : String(err)}`
+    }
+
+    // Surface any image the tool produced (e.g. lemonade_generate_image) on the
+    // napkin panel so the user actually sees it , the bytes are kept out of the
+    // model's context, so without this they'd be lost and the model would only
+    // be able to describe the result.
+    if (ok && resultImages.length > 0) {
+      resultImages.forEach((img, i) => {
+        const napkin: Napkin = {
+          title: resultImages.length > 1 ? `${toolLabel} (image ${i + 1})` : toolLabel,
+          kind: 'image',
+          content: img.data,
+          mimeType: img.mimeType
+        }
+        emit({ type: 'napkin_show', napkin })
+      })
     }
 
     // If a filesystem tool succeeds, try to extract the folder path and show it
