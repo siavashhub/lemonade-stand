@@ -142,6 +142,15 @@ let currentTranscribeAbort: AbortController | null = null
 // mirror events to an open UI and to raise desktop notifications.
 let mainWindow: BrowserWindow | null = null
 
+// Resolve the app icon for the window. In a packaged build resources/ ship as
+// extraResources under process.resourcesPath (they are NOT inside app.asar, so
+// app.getAppPath() can't see them); in dev app.getAppPath() is the project root.
+function resolveIconPath(): string {
+  const iconFile = process.platform === 'win32' ? 'icon.ico' : 'icon.png'
+  const base = app.isPackaged ? process.resourcesPath : app.getAppPath()
+  return join(base, 'resources', iconFile)
+}
+
 function createWindow(): void {
   const window = new BrowserWindow({
     width: 1000,
@@ -150,7 +159,7 @@ function createWindow(): void {
     // Frameless: no native OS title bar. The renderer draws its own top bar and
     // window controls (see App.tsx / styles.css).
     frame: false,
-    icon: join(app.getAppPath(), 'resources', process.platform === 'win32' ? 'icon.ico' : 'icon.png'),
+    icon: resolveIconPath(),
     webPreferences: {
       preload: join(__dirname, '../preload/index.mjs'),
       sandbox: false,
@@ -676,7 +685,14 @@ function emitPitcher(evt: PitcherEvent): void {
 async function pourPitcher(p: Pitcher): Promise<PitcherRunResult> {
   emitPitcher({ type: 'pitcher_started', id: p.id })
 
-  const messages: ChatMessage[] = [{ role: 'user', content: p.prompt }]
+  // A napkin pour steers the model to present its answer as a rich artifact via
+  // show_napkin; we still synthesize one below as a fallback if it ignores the
+  // hint, so "serves napkin" always yields a Napkin.
+  const prompt =
+    p.output === 'napkin'
+      ? `${p.prompt}\n\nPresent your final answer by calling the show_napkin tool (use kind:"markdown" unless another kind fits the content better) rather than only replying in chat.`
+      : p.prompt
+  const messages: ChatMessage[] = [{ role: 'user', content: prompt }]
   let napkin: Napkin | null = null
   let finalText = ''
 
@@ -725,6 +741,11 @@ async function pourPitcher(p: Pitcher): Promise<PitcherRunResult> {
   // Persist the pour as a normal saved conversation the user can reopen later.
   const sessionId = randomUUID()
   const entries: TranscriptEntry[] = [{ kind: 'assistant', text: finalText || '(no reply)' }]
+  // Honor the Pitcher's output preference: a napkin pour must always serve a
+  // Napkin, so wrap the reply text when the model didn't emit one itself.
+  if (!napkin && p.output === 'napkin' && finalText.trim()) {
+    napkin = { title: p.name, kind: 'markdown', content: finalText }
+  }
   if (napkin) entries.push({ kind: 'napkin', napkin })
   writeSession(appPath, {
     id: sessionId,
@@ -804,8 +825,10 @@ app.whenReady().then(async () => {
   )
 
   // Give Windows a stable app identity so the taskbar uses our icon and groups
-  // windows under one entry.
-  if (process.platform === 'win32') app.setAppUserModelId('com.lemonade.stand')
+  // windows under one entry. This MUST match electron-builder's appId so the
+  // running window maps to the installed shortcut (otherwise the taskbar falls
+  // back to a blank/generic icon).
+  if (process.platform === 'win32') app.setAppUserModelId('com.lemonadestand.app')
 
   // Drop the native application menu (File, Edit, View, …). The frameless
   // window has no menu bar to show it in anyway.
