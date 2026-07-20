@@ -22,7 +22,7 @@ tools.
 
 ## Demo
 
-<video src="demo/lemonade-stand-demo.mp4" controls width="800"></video>
+[Watch the demo](https://github.com/siavashhub/lemonade-stand/blob/main/demo/lemonade-stand-demo.mp4)
 
 ## Prerequisites
 
