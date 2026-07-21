@@ -1944,14 +1944,27 @@ function ContextEditor({
   onApply: (ctxSize: number) => void
   onClose: () => void
 }): JSX.Element {
-  const max = info.maxContextWindow ?? 131072
+  // The model's advertised max is a *hint* for the loaded model, not a hard cap:
+  // the server ultimately clamps or rejects a value it can't honor, and the
+  // reported max isn't always present or accurate for every runtime.
+  const max = info.maxContextWindow
   const [value, setValue] = useState(String(info.contextSize))
 
-  // Common context sizes, capped at the model's advertised maximum.
-  const presets = [4096, 8192, 16384, 32768, 65536].filter((p) => p <= max)
+  // Common context sizes shown as quick picks. We don't filter these by the
+  // model max , picks above it stay available and are flagged instead.
+  const presets = [4096, 8192, 16384, 32768, 65536, 131072]
 
   const parsed = Number(value)
-  const valid = Number.isFinite(parsed) && parsed >= 512 && parsed <= max
+  // Only a sane lower bound is enforced; exceeding the model's max is allowed.
+  const valid = Number.isFinite(parsed) && parsed >= 512
+  const overMax = valid && max != null && parsed > max
+
+  // Slider bounds. The slider is a quick way to push toward the model's max, so
+  // its ceiling is that max when known, else the largest preset as a fallback.
+  const sliderMax = max ?? 131072
+  const sliderVal = Math.min(Math.max(valid ? parsed : 512, 512), sliderMax)
+  const fillPct = Math.round(((sliderVal - 512) / Math.max(sliderMax - 512, 1)) * 100)
+  const fmt = (n: number): string => (n >= 1024 ? `${Math.round(n / 1024)}K` : String(n))
 
   return (
     <div className="context-editor" role="dialog" aria-label="Change context size">
@@ -1963,26 +1976,62 @@ function ContextEditor({
       </div>
       <p className="context-editor-note">
         Reload <code>{info.model}</code> with a new runtime context size.
-        {info.maxContextWindow ? ` Model max: ${info.maxContextWindow.toLocaleString()}.` : ''}
         {info.source === 'override' ? ' A configured override currently pins the budget.' : ''}
       </p>
+      {max != null && (
+        <div className="context-max-chip">
+          <span className="context-max-icon" aria-hidden="true">
+            ⓘ
+          </span>
+          <span className="context-max-text">
+            Selected model’s max is <strong>{max.toLocaleString()}</strong> tokens
+          </span>
+          <button
+            className="context-max-use"
+            disabled={busy || parsed === max}
+            onClick={() => setValue(String(max))}
+          >
+            Use max
+          </button>
+        </div>
+      )}
       <div className="context-presets">
         {presets.map((p) => (
           <button
             key={p}
-            className={Number(value) === p ? 'active' : ''}
+            className={
+              (Number(value) === p ? 'active' : '') + (max != null && p > max ? ' over-max' : '')
+            }
             disabled={busy}
+            title={max != null && p > max ? `Above model max (${max.toLocaleString()})` : undefined}
             onClick={() => setValue(String(p))}
           >
             {p >= 1024 ? `${p / 1024}K` : p}
           </button>
         ))}
       </div>
+      <div className="context-slider-row">
+        <input
+          type="range"
+          className={'context-slider' + (overMax ? ' over-max' : '')}
+          min={512}
+          max={sliderMax}
+          step={512}
+          value={sliderVal}
+          disabled={busy}
+          onChange={(e) => setValue(e.target.value)}
+          style={{ '--fill': `${fillPct}%` } as React.CSSProperties}
+          aria-label="Context size slider"
+        />
+        <div className="context-slider-scale">
+          <span>512</span>
+          <span>{fmt(sliderMax)}</span>
+        </div>
+      </div>
       <div className="context-editor-row">
         <input
           type="number"
           min={512}
-          max={max}
           step={512}
           value={value}
           disabled={busy}
@@ -1996,8 +2045,15 @@ function ContextEditor({
           {busy ? 'Reloading…' : 'Apply'}
         </button>
       </div>
-      {!valid && (
-        <p className="context-editor-err">Enter a value between 512 and {max.toLocaleString()}.</p>
+      {!valid && <p className="context-editor-err">Enter a value of at least 512 tokens.</p>}
+      {overMax && (
+        <p className="context-editor-hint">
+          <span className="context-editor-hint-icon" aria-hidden="true">
+            ⚠
+          </span>
+          Above the model’s advertised max ({max!.toLocaleString()}). The server may clamp it or
+          fail to load.
+        </p>
       )}
       {error && <p className="context-editor-err">{error}</p>}
     </div>

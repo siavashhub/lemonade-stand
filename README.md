@@ -68,9 +68,9 @@ The quickest way to run a lemonade server would to be install docker and run it 
 docker run -d `
   --name lemonade-server `
   -p 13305:13305 `
-  -v lemonade-cache:/opt/lemonade/.cache/huggingface `
+  -v "$env:USERPROFILE/.cache/huggingface:/opt/lemonade/.cache/huggingface" `
   -v lemonade-llama:/opt/lemonade/llama `
-  -v lemonade-recipe:/opt/lemonade/.cache/lemonade `
+  -v "$env:USERPROFILE/.cache/lemonade:/opt/lemonade/.cache/lemonade" `
   ghcr.io/lemonade-sdk/lemonade-server:latest
 ```
 Otherwise you can download the server from Lemonade server it self: (https://github.com/lemonade-sdk/lemonade)
