@@ -629,6 +629,13 @@ export class LemonadeClient {
   /** Context-window info for the renderer to display. */
   async getContextInfo(): Promise<ContextInfo> {
     const { size, source } = await this.resolveContextSize()
+    // The model's advertised max is a display hint. When it's still unknown
+    // (e.g. /health didn't report it, or the active model is an Omni collection
+    // that has no context of its own) resolve it from the loaded LLM component
+    // and cache it for subsequent reads.
+    if (this.cachedMaxContext === undefined) {
+      this.cachedMaxContext = await this.resolveMaxContextWindow()
+    }
     return {
       model: this.model,
       contextSize: size,
@@ -636,6 +643,40 @@ export class LemonadeClient {
       reserve: this.completionReserve,
       source
     }
+  }
+
+  /**
+   * Best-effort resolution of the *display* max context window (a UI hint).
+   *
+   * For a plain model this is its own catalogue `max_context_window`. For an
+   * Omni collection , a router with no context window of its own , chat runs on
+   * a loaded LLM component (e.g. Qwen3-…-GGUF), so we resolve the max from that
+   * component instead of the collection entry, which reports none. The loaded
+   * LLM's name comes from /health (fetchModelHealth already prefers it over the
+   * collection name); we then read its catalogue entry for the max.
+   */
+  private async resolveMaxContextWindow(): Promise<number | undefined> {
+    const health = await this.fetchModelHealth()
+    // /health sometimes carries it directly (for a plain model or a component).
+    if (health?.max_context_window && health.max_context_window > 0) {
+      return health.max_context_window
+    }
+    // Otherwise consult the /models catalogue. Prefer the loaded LLM component's
+    // name (set for Omni collections); fall back to the configured model id.
+    const llmName = health?.model_name ?? this.model
+    const viaComponent = await this.fetchModelEntry(llmName)
+    if (viaComponent?.max_context_window && viaComponent.max_context_window > 0) {
+      return viaComponent.max_context_window
+    }
+    // Last resort: the configured model's own entry, when it differs from the
+    // component we just tried (a plain model whose health named something else).
+    if (llmName !== this.model) {
+      const own = await this.fetchModelEntry(this.model)
+      if (own?.max_context_window && own.max_context_window > 0) {
+        return own.max_context_window
+      }
+    }
+    return undefined
   }
 
   /**
@@ -684,6 +725,11 @@ export class LemonadeClient {
       }
       if (typeof entry?.recipe_options?.ctx_size === 'number') {
         this.cachedServerContext = entry.recipe_options.ctx_size
+      }
+      // /health may not report the model's advertised max; resolve it (via the
+      // loaded LLM component for Omni collections) so the UI hint has a value.
+      if (this.cachedMaxContext === undefined) {
+        this.cachedMaxContext = await this.resolveMaxContextWindow()
       }
       // The user explicitly changed context from the UI. Honor that live choice
       // for the current session even when an env/config override was present,
