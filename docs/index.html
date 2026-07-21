@@ -1323,7 +1323,7 @@
         <code>lemond</code>. Stock tools, watch the agent think and keep every token on your machine.
       </p>
       <div class="cta-row reveal d3">
-        <a class="btn secondary" href="https://github.com/siavashhub/lemonade-stand/releases" target="_blank" rel="noopener">Download</a>
+        <a class="btn secondary" href="https://github.com/siavashhub/lemonade-stand/releases" target="_blank" rel="noopener">⬇ Download</a>
         <button class="btn white" id="demoOpen">▶ Watch demo</button>
         <a class="btn primary" href="https://github.com/lemonade-sdk/lemonade" target="_blank" rel="noopener">About Lemonade ↗</a>
       </div>
@@ -1772,15 +1772,17 @@
       // ---- Theme toggle (mirrors the app's data-theme switch) ----
       const root = document.documentElement;
       const toggle = document.getElementById('themeToggle');
-      function applyThemeIcon() {
-        toggle.textContent = root.getAttribute('data-theme') === 'light' ? '☀️' : '🌙';
-      }
-      toggle.addEventListener('click', () => {
-        const next = root.getAttribute('data-theme') === 'light' ? 'dark' : 'light';
-        root.setAttribute('data-theme', next);
+      if (toggle) {
+        const applyThemeIcon = () => {
+          toggle.textContent = root.getAttribute('data-theme') === 'light' ? '☀️' : '🌙';
+        };
+        toggle.addEventListener('click', () => {
+          const next = root.getAttribute('data-theme') === 'light' ? 'dark' : 'light';
+          root.setAttribute('data-theme', next);
+          applyThemeIcon();
+        });
         applyThemeIcon();
-      });
-      applyThemeIcon();
+      }
 
       // ---- Context donut ring (conic-gradient like the app) ----
       (function paintDonut() {
