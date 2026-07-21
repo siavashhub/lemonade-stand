@@ -1237,11 +1237,72 @@
         padding: 1px 6px;
         font-size: 12px;
       }
+
+      /* ---- Video demo modal ---- */
+      .demo-modal {
+        display: none;
+        position: fixed;
+        inset: 0;
+        z-index: 200;
+        background: rgba(0, 0, 0, 0.85);
+        align-items: center;
+        justify-content: center;
+        padding: 24px;
+      }
+      .demo-modal.open {
+        display: flex;
+      }
+      .demo-modal-inner {
+        position: relative;
+        width: 100%;
+        max-width: 900px;
+        border-radius: 14px;
+        overflow: hidden;
+        box-shadow: 0 40px 100px -20px rgba(0, 0, 0, 0.8);
+        background: #000;
+        border: 1px solid var(--border);
+      }
+      .demo-modal video {
+        display: block;
+        width: 100%;
+        height: auto;
+      }
+      .demo-modal-close {
+        position: absolute;
+        top: 12px;
+        right: 12px;
+        width: 34px;
+        height: 34px;
+        border-radius: 50%;
+        background: rgba(0, 0, 0, 0.6);
+        border: 1px solid rgba(255, 255, 255, 0.2);
+        color: #fff;
+        font-size: 16px;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        line-height: 1;
+        z-index: 1;
+      }
+      .demo-modal-close:hover {
+        background: rgba(255, 255, 255, 0.15);
+      }
     </style>
   </head>
   <body>
     <div class="backdrop"></div>
     <div class="progress" id="progress"></div>
+
+    <!-- =================== VIDEO DEMO MODAL =================== -->
+    <div class="demo-modal" id="demoModal" role="dialog" aria-modal="true" aria-label="Demo video">
+      <div class="demo-modal-inner">
+        <button class="demo-modal-close" id="demoClose" aria-label="Close demo">✕</button>
+        <video id="demoVideo" controls preload="none">
+          <source src="../demo/lemonade-stand-demo.mp4" type="video/mp4" />
+        </video>
+      </div>
+    </div>
 
     <!-- Section dot rail -->
     <div class="dotrail" id="dotrail"></div>
@@ -1263,7 +1324,7 @@
       </p>
       <div class="cta-row reveal d3">
         <a class="btn secondary" href="https://github.com/siavashhub/lemonade-stand/releases" target="_blank" rel="noopener">Download</a>
-        <a class="btn white" href="#s-what">Take the tour ↓</a>
+        <button class="btn white" id="demoOpen">▶ Watch demo</button>
         <a class="btn primary" href="https://github.com/lemonade-sdk/lemonade" target="_blank" rel="noopener">About Lemonade ↗</a>
       </div>
       <div class="stat-row reveal d3">
@@ -1771,6 +1832,21 @@
         { threshold: 0.5 }
       );
       sections.forEach((s) => railIO.observe(s));
+
+      // ---- Demo modal ----
+      const demoModal = document.getElementById('demoModal');
+      const demoVideo = document.getElementById('demoVideo');
+      document.getElementById('demoOpen').addEventListener('click', () => {
+        demoModal.classList.add('open');
+        demoVideo.play();
+      });
+      function closeDemo() {
+        demoModal.classList.remove('open');
+        demoVideo.pause();
+      }
+      document.getElementById('demoClose').addEventListener('click', closeDemo);
+      demoModal.addEventListener('click', (e) => { if (e.target === demoModal) closeDemo(); });
+      document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeDemo(); });
     </script>
   </body>
 </html>
