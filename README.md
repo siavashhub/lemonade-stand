@@ -22,7 +22,7 @@ tools.
 
 ## Demo
 
-https://github.com/siavashhub/lemonade-stand/raw/main/docs/demo/lemonade-stand-demo.mp4
+https://siavashhub.github.io/lemonade-stand
 
 ## Prerequisites
 
