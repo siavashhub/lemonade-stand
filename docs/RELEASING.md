@@ -138,6 +138,7 @@ PR into release/0.2
 ```powershell
 git checkout release/0.2
 git tag v0.2.1
+git push origin v0.2.1
 ```
 
 Finally cherry pick hotfix commits to main
