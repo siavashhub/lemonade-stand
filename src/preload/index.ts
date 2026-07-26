@@ -45,6 +45,12 @@ const api: RendererApi = {
     return () => ipcRenderer.removeListener('agent:event', listener)
   },
 
+  onServersChanged(handler: () => void): () => void {
+    const listener = (): void => handler()
+    ipcRenderer.on('servers:changed', listener)
+    return () => ipcRenderer.removeListener('servers:changed', listener)
+  },
+
   respondApproval(id: string, decision: ApprovalDecision): void {
     ipcRenderer.send('agent:approve', id, decision)
   },

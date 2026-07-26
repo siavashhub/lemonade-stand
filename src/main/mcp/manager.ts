@@ -11,6 +11,34 @@ import type { AgentTool, McpServerConfig } from '@shared/types'
 
 const SEP = '__'
 
+// A transient HTTP MCP connection can fail right at app startup for reasons that
+// clear themselves a moment later: in a packaged build the network stack may not
+// be fully ready the instant `app.whenReady()` fires, and a Lemonade server
+// launched alongside the app is often still warming up its `/mcp` gateway. The
+// first attempt is sticky , the Pantry only refetches server state on user action
+// , so a one-off failure looked permanent and forced users to disable/re-enable
+// the entry to recover. Retry HTTP connects a few times with a short linear
+// backoff so a transient failure self-heals. Definitive rejections (e.g. a 401
+// from a key-protected gateway) carry an HTTP status and are NOT retried.
+const HTTP_CONNECT_ATTEMPTS = 4
+const HTTP_CONNECT_BACKOFF_MS = 400
+
+const delay = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
+
+// True when an error is a network-level failure (no HTTP response was received)
+// rather than a definitive server rejection. Only these are worth retrying: a
+// 4xx/5xx status means the server answered and retrying won't change the outcome.
+function isTransientNetworkError(err: unknown): boolean {
+  // The SDK surfaces HTTP status rejections with a numeric `code`; treat any such
+  // structured HTTP error as definitive (don't retry).
+  const code = (err as { code?: unknown })?.code
+  if (typeof code === 'number') return false
+  const msg = err instanceof Error ? `${err.message} ${String(err.cause ?? '')}` : String(err)
+  return /fetch failed|ECONNREFUSED|ECONNRESET|ENOTFOUND|ETIMEDOUT|EAI_AGAIN|socket hang up|network/i.test(
+    msg
+  )
+}
+
 /** An image block produced by an MCP tool, base64-encoded (no `data:` prefix). */
 export interface McpToolImage {
   data: string
@@ -186,7 +214,7 @@ export class McpManager {
     }
   }
 
-  private async connectOne(server: McpServerConfig): Promise<void> {
+  private async connectOne(server: McpServerConfig, httpAttempts = HTTP_CONNECT_ATTEMPTS): Promise<void> {
     const client = new Client({ name: 'lemonade-stand', version: '0.1.0' })
 
     if (server.transport === 'stdio') {
@@ -205,10 +233,7 @@ export class McpManager {
       })
       await client.connect(transport)
     } else {
-      const transport = new StreamableHTTPClientTransport(new URL(server.url), {
-        requestInit: server.headers ? { headers: server.headers } : undefined
-      })
-      await client.connect(transport)
+      await this.connectHttp(client, server, httpAttempts)
     }
 
     const { tools } = await client.listTools()
@@ -241,6 +266,57 @@ export class McpManager {
     this.connected.push({ id: server.id, client, toolNames })
     this.runtime.set(server.id, { connected: true, toolCount: tools.length })
     console.log(`[mcp] connected "${server.id}" (${tools.length} tools)`)
+  }
+
+  // Connect a Streamable HTTP MCP server, retrying transient network failures so
+  // a not-yet-ready network stack or a still-warming-up gateway (the Lemonade
+  // Gateway's common startup race) self-heals instead of stranding the entry in
+  // an error state until the user toggles it off and on. A fresh transport is
+  // built per attempt since a failed connect leaves the previous one unusable.
+  private async connectHttp(client: Client, server: McpServerConfig, attempts: number): Promise<void> {
+    for (let attempt = 1; ; attempt++) {
+      const transport = new StreamableHTTPClientTransport(new URL(server.url), {
+        requestInit: server.headers ? { headers: server.headers } : undefined
+      })
+      try {
+        await client.connect(transport)
+        return
+      } catch (err) {
+        if (attempt >= attempts || !isTransientNetworkError(err)) throw err
+        console.warn(
+          `[mcp] "${server.id}" connect attempt ${attempt}/${attempts} failed, retrying:`,
+          err instanceof Error ? err.message : String(err)
+        )
+        await delay(HTTP_CONNECT_BACKOFF_MS * attempt)
+      }
+    }
+  }
+
+  /**
+   * Attempt to connect any enabled server that isn't currently connected, in a
+   * single quick pass (no per-server retry loop, so a background sweep can't
+   * stall). This is the counterpart to the app's periodic health probe: a
+   * Lemonade Gateway whose server was started *after* the app , or that went
+   * away and came back , reconnects on its own instead of staying stuck on
+   * "can't reach this server" until the user toggles it off and on. Returns true
+   * when any server's connection state changed, so the caller can refresh the UI
+   * and the agent's tool list.
+   */
+  async connectMissing(servers: McpServerConfig[]): Promise<boolean> {
+    let changed = false
+    for (const server of servers) {
+      if (this.runtime.get(server.id)?.connected) continue
+      try {
+        await this.connectOne(server, 1)
+        changed = true
+      } catch (err) {
+        // Still down; keep the (updated) error for the UI and try again next
+        // sweep. Stay quiet , a server the user hasn't started yet would spam
+        // the log every few seconds otherwise.
+        this.runtime.set(server.id, { connected: false, toolCount: 0, error: String(err) })
+      }
+    }
+    return changed
   }
 
   getTools(): AgentTool[] {

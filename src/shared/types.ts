@@ -431,6 +431,11 @@ export interface RendererApi {
   /** Playful "agent is working" phrases for the thinking indicator. */
   getThinkingPhrases(): Promise<string[]>
   onAgentEvent(handler: (event: AgentEvent) => void): () => void
+  /** Fires when a background reconnect sweep changes MCP server connectivity
+   * (e.g. the Lemonade Gateway comes online after its server was started later),
+   * so the UI can refresh server states and the agent's tool list. Returns an
+   * unsubscribe function. */
+  onServersChanged(handler: () => void): () => void
   /** Answer a pending `tool_approval_request`. */
   respondApproval(id: string, decision: ApprovalDecision): void
   /** Turn the session-scoped approval bypass on or off. While on, tool calls

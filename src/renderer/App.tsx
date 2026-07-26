@@ -894,6 +894,18 @@ export function App(): JSX.Element {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight })
   }, [entries, approvals, busy, stepLimit])
 
+  // The main process reconnects enabled-but-disconnected MCP servers in the
+  // background (e.g. the Lemonade Gateway once its server is finally running).
+  // When one comes online, pull the freshly available tools and file-access
+  // roots in so the agent can use them without waiting for the next user action.
+  useEffect(() => {
+    return window.api.onServersChanged(() => {
+      refreshTools()
+      refreshFsRoots()
+    })
+  }, [])
+
+
   // Persistent listener for synthesized speech. TTS is fire-and-forget in the
   // main process, so the 'audio' event often arrives *after* the per-turn
   // handler in send() has already torn down on 'done'. Handling it here , for
@@ -3473,6 +3485,16 @@ function Pantry({
   }
 
   useEffect(refresh, [])
+
+  // Reflect background reconnects live: when the main process brings an
+  // enabled-but-disconnected server online (e.g. the Lemonade Gateway after its
+  // server starts), re-pull server states so a card that showed "can't reach
+  // this server" flips to connected on its own, without a manual toggle.
+  useEffect(() => {
+    return window.api.onServersChanged(() => {
+      window.api.listServers().then(setServers).catch(() => setServers([]))
+    })
+  }, [])
 
   const stateOf = (id: string): McpServerState | undefined => servers.find((s) => s.id === id)
 

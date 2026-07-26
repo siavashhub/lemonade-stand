@@ -154,6 +154,10 @@ let currentTranscribeAbort: AbortController | null = null
 // mirror events to an open UI and to raise desktop notifications.
 let mainWindow: BrowserWindow | null = null
 
+// Guards the periodic MCP reconnect sweep (see whenReady) so a slow attempt
+// can't overlap with the next tick.
+let serverSweepInFlight = false
+
 // Resolve the app icon for the window. In a packaged build resources/ ship as
 // extraResources under process.resourcesPath (they are NOT inside app.asar, so
 // app.getAppPath() can't see them); in dev app.getAppPath() is the project root.
@@ -922,8 +926,42 @@ app.whenReady().then(async () => {
   // window has no menu bar to show it in anyway.
   Menu.setApplicationMenu(null)
 
-  await mcp.connectAll(withGatewayAuth(config.servers))
+  // Show the window first, THEN connect MCP servers. In a packaged build the
+  // network stack isn't reliably ready the instant whenReady() fires, so an
+  // HTTP MCP connect (the Lemonade Gateway) attempted before the first window
+  // could fail with a transient "fetch failed" , which is exactly why users saw
+  // the gateway stuck on "can't reach this server" until they toggled it. This
+  // also keeps the connect's retry/backoff off the window's critical path so a
+  // genuinely-offline server never delays the UI appearing.
   createWindow()
+
+  await mcp.connectAll(withGatewayAuth(config.servers))
+
+  // Background reconnect sweep. The Lemonade Gateway MCP entry depends on the
+  // Lemonade server, which a user may start AFTER the app. The server-status
+  // indicator already recovers on its own (the renderer re-probes /health every
+  // few seconds), but an MCP entry that failed its initial connect used to stay
+  // stuck on "can't reach this server" until it was manually toggled off and on.
+  // Periodically retry any enabled-but-disconnected server so the gateway heals
+  // the same way the status pill does, and notify the renderer when something
+  // newly connects so the Pantry and the agent's tool list refresh live.
+  setInterval(() => {
+    if (serverSweepInFlight) return
+    serverSweepInFlight = true
+    void (async () => {
+      try {
+        const enabled = withGatewayAuth(readServers(appPath).filter((s) => s.enabled))
+        const changed = await mcp.connectMissing(enabled)
+        if (changed && mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('servers:changed')
+        }
+      } catch {
+        // Best-effort; the next tick tries again.
+      } finally {
+        serverSweepInFlight = false
+      }
+    })()
+  }, 5000)
 
   // Arm scheduled Pitchers now that the window exists: runs on-open tasks and
   // any daily task whose time was missed while the app was closed, then keeps
