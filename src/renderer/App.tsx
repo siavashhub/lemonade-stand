@@ -65,7 +65,7 @@ type Theme = 'light' | 'dark'
 // The overlays that can be shown one-at-a-time: top-bar/footer popovers
 // (connection, context, usage) and the full modals (pantry, models, history).
 // A single active-panel value enforces that opening one closes any other.
-type Panel = 'connection' | 'context' | 'usage' | 'pantry' | 'models' | 'history' | 'pitchers' | 'menu'
+type Panel = 'connection' | 'context' | 'replycap' | 'usage' | 'pantry' | 'models' | 'history' | 'pitchers' | 'menu'
 
 // Convert base64 audio from lemond's TTS into a playable object URL. Rejects
 // (rather than swallowing) so callers can surface a playback failure instead of
@@ -750,10 +750,28 @@ export function App(): JSX.Element {
         contextSize: info.contextSize,
         maxContextWindow: info.maxContextWindow,
         reserve: info.reserve,
+        maxCompletionTokens: info.maxCompletionTokens,
         source: info.source
       })
       if (info.error) setContextError(info.error)
       else closePanel()
+    } catch (err) {
+      setContextError(String(err))
+    } finally {
+      setContextBusy(false)
+    }
+  }
+
+  // Update the reply-length cap (max_completion_tokens) live. Unlike context
+  // size this needs no server reload , it just changes the value sent on the
+  // next completion , so it applies instantly and persists across restarts.
+  async function applyReplyCap(tokens: number): Promise<void> {
+    setContextBusy(true)
+    setContextError(null)
+    try {
+      const info = await window.api.setMaxCompletionTokens(tokens)
+      setContext(info)
+      closePanel()
     } catch (err) {
       setContextError(String(err))
     } finally {
@@ -1534,6 +1552,33 @@ export function App(): JSX.Element {
             )}
           </div>
         )}
+        {context !== null && (
+          <div className="context-control statusbar-item">
+            <button
+              className="context-size"
+              onClick={() => togglePanel('replycap')}
+              title={
+                (context.maxCompletionTokens > 0
+                  ? `Reply capped at ${context.maxCompletionTokens.toLocaleString()} tokens`
+                  : 'Reply length uncapped (server default)') +
+                '\nBounds runaway reasoning. Click to change'
+              }
+            >
+              {context.maxCompletionTokens > 0
+                ? `${context.maxCompletionTokens.toLocaleString()} reply ▴`
+                : '∞ reply ▴'}
+            </button>
+            {activePanel === 'replycap' && (
+              <ReplyCapEditor
+                info={context}
+                busy={contextBusy}
+                error={contextError}
+                onApply={applyReplyCap}
+                onClose={closePanel}
+              />
+            )}
+          </div>
+        )}
         {breakdown !== null && (
           <div className="context-control statusbar-item">
             <ContextUsageBadge
@@ -2053,6 +2098,94 @@ function ContextEditor({
           </span>
           Above the model’s advertised max ({max!.toLocaleString()}). The server may clamp it or
           fail to load.
+        </p>
+      )}
+      {error && <p className="context-editor-err">{error}</p>}
+    </div>
+  )
+}
+
+// Compact popover to set the reply-length cap (max_completion_tokens). Unlike
+// the context editor this doesn't reload the model , it just changes the value
+// sent on the next completion , so it applies instantly. Bounds runaway
+// reasoning: a small local model that ruminates can't generate until it fills
+// the whole context window. 0 (Off) leaves the reply uncapped.
+function ReplyCapEditor({
+  info,
+  busy,
+  error,
+  onApply,
+  onClose
+}: {
+  info: ContextInfo
+  busy: boolean
+  error: string | null
+  onApply: (tokens: number) => void
+  onClose: () => void
+}): JSX.Element {
+  const [value, setValue] = useState(String(info.maxCompletionTokens))
+
+  // Common caps. 0 disables the cap (uncapped, server default).
+  const presets = [0, 512, 1024, 2048, 4096, 8192]
+
+  const parsed = Number(value)
+  // 0 is valid (uncapped); otherwise require a sane minimum so a reply can't be
+  // truncated to uselessness.
+  const valid = Number.isFinite(parsed) && parsed >= 0 && (parsed === 0 || parsed >= 128)
+  const label = (n: number): string => (n === 0 ? 'Off' : n >= 1024 ? `${n / 1024}K` : String(n))
+
+  return (
+    <div className="context-editor" role="dialog" aria-label="Change reply length cap">
+      <div className="context-editor-head">
+        <strong>Reply length cap</strong>
+        <button className="context-editor-close" onClick={onClose} aria-label="Close">
+          ×
+        </button>
+      </div>
+      <p className="context-editor-note">
+        Maximum tokens the model may produce per reply (
+        <code>max_completion_tokens</code>). Bounds runaway reasoning on small
+        models. <strong>Off</strong> uses the server default.
+      </p>
+      <div className="context-presets">
+        {presets.map((p) => (
+          <button
+            key={p}
+            className={Number(value) === p ? 'active' : ''}
+            disabled={busy}
+            onClick={() => setValue(String(p))}
+          >
+            {label(p)}
+          </button>
+        ))}
+      </div>
+      <div className="context-editor-row">
+        <input
+          type="number"
+          min={0}
+          step={128}
+          value={value}
+          disabled={busy}
+          onChange={(e) => setValue(e.target.value)}
+        />
+        <button
+          className="context-apply"
+          disabled={!valid || busy || parsed === info.maxCompletionTokens}
+          onClick={() => onApply(parsed)}
+        >
+          {busy ? 'Saving…' : 'Apply'}
+        </button>
+      </div>
+      {!valid && (
+        <p className="context-editor-err">Enter 0 (Off) or at least 128 tokens.</p>
+      )}
+      {info.maxCompletionTokens > 0 && info.maxCompletionTokens >= info.contextSize && (
+        <p className="context-editor-hint">
+          <span className="context-editor-hint-icon" aria-hidden="true">
+            ⚠
+          </span>
+          The cap is as large as the context window, so it won’t bound the reply
+          in practice.
         </p>
       )}
       {error && <p className="context-editor-err">{error}</p>}

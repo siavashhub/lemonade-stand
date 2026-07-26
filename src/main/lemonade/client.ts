@@ -119,6 +119,9 @@ export class LemonadeClient {
   private apiKey: string
   private contextOverride?: number
   private completionReserve: number
+  // Hard cap on the reply length (max_completion_tokens). Bounds runaway
+  // reasoning/output. 0 = no cap (server default).
+  private maxCompletionTokens: number
   // Cached server-reported context size, so we don't refetch every step. Only a
   // successful lookup is cached; failures fall back and retry next turn.
   private cachedServerContext?: number
@@ -141,7 +144,8 @@ export class LemonadeClient {
     apiKey: string,
     model: string,
     contextOverride?: number,
-    completionReserve = 512
+    completionReserve = 512,
+    maxCompletionTokens = 0
   ) {
     this.client = new OpenAI({
       baseURL,
@@ -154,6 +158,27 @@ export class LemonadeClient {
     this.apiKey = apiKey
     this.contextOverride = contextOverride && contextOverride > 0 ? contextOverride : undefined
     this.completionReserve = completionReserve
+    this.maxCompletionTokens = maxCompletionTokens > 0 ? maxCompletionTokens : 0
+  }
+
+  /** The current reply-length cap (max_completion_tokens); 0 means no cap. */
+  get replyCap(): number {
+    return this.maxCompletionTokens
+  }
+
+  /** Update the reply-length cap live (no server reload needed). A value <= 0
+   * disables the cap. Takes effect on the next chat completion. */
+  setMaxCompletionTokens(tokens: number): void {
+    this.maxCompletionTokens = Number.isFinite(tokens) && tokens > 0 ? Math.floor(tokens) : 0
+  }
+
+  /** Tokens to hold back for the reply when budgeting the prompt. When a reply
+   * cap is set we must reserve at least that many, so the preflight leaves room
+   * for the full capped reply instead of letting it overflow the window. */
+  private get effectiveReserve(): number {
+    return this.maxCompletionTokens > 0
+      ? Math.max(this.completionReserve, this.maxCompletionTokens)
+      : this.completionReserve
   }
 
   /** The id of the model currently configured as the agent's chat model. */
@@ -657,7 +682,8 @@ export class LemonadeClient {
       model: this.model,
       contextSize: size,
       maxContextWindow: this.cachedMaxContext,
-      reserve: this.completionReserve,
+      reserve: this.effectiveReserve,
+      maxCompletionTokens: this.maxCompletionTokens,
       source
     }
   }
@@ -756,7 +782,8 @@ export class LemonadeClient {
         model: this.model,
         contextSize: this.cachedServerContext,
         maxContextWindow: this.cachedMaxContext,
-        reserve: this.completionReserve,
+        reserve: this.effectiveReserve,
+        maxCompletionTokens: this.maxCompletionTokens,
         source: 'server'
       }
     } catch (err) {
@@ -791,13 +818,13 @@ export class LemonadeClient {
   ): Promise<ContextBudget> {
     const { size, source } = await this.resolveContextSize()
     const estimatedTokens = this.estimateTokens(messages, tools)
-    const budget = Math.max(0, size - this.completionReserve)
+    const budget = Math.max(0, size - this.effectiveReserve)
     const overflow = estimatedTokens > budget
     const warn = !overflow && estimatedTokens > budget * 0.85
     return {
       estimatedTokens,
       contextSize: size,
-      reserve: this.completionReserve,
+      reserve: this.effectiveReserve,
       budget,
       overflow,
       warn,
@@ -858,7 +885,7 @@ export class LemonadeClient {
     return {
       model: this.model,
       contextSize: size,
-      reserve: this.completionReserve,
+      reserve: this.effectiveReserve,
       usedTokens,
       categories: {
         systemInstructions,
@@ -923,7 +950,11 @@ export class LemonadeClient {
         model: this.model,
         messages: outgoing,
         tools: tools.length > 0 ? tools : undefined,
-        tool_choice: tools.length > 0 ? 'auto' : undefined
+        tool_choice: tools.length > 0 ? 'auto' : undefined,
+        // Cap the reply so a ruminating reasoning model can't generate until it
+        // exhausts the context window ("overthinks it and takes forever"). 0
+        // leaves it uncapped (server default).
+        max_completion_tokens: this.maxCompletionTokens > 0 ? this.maxCompletionTokens : undefined
       },
       { signal }
     )

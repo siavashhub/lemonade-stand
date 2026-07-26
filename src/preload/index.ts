@@ -109,6 +109,10 @@ const api: RendererApi = {
     return ipcRenderer.invoke('agent:set-context', ctxSize)
   },
 
+  setMaxCompletionTokens(tokens: number) {
+    return ipcRenderer.invoke('agent:set-max-completion-tokens', tokens)
+  },
+
   listModels() {
     return ipcRenderer.invoke('agent:list-models')
   },

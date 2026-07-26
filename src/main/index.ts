@@ -99,7 +99,8 @@ const lemonade = new LemonadeClient(
   config.lemonadeApiKey,
   config.model,
   config.contextSize,
-  config.completionReserve
+  config.completionReserve,
+  config.maxCompletionTokens
 )
 const mcp = new McpManager()
 const agent = new Agent(lemonade, mcp, config.maxSteps, config.systemPrompt, config.compactThreshold)
@@ -461,6 +462,16 @@ ipcMain.handle('agent:set-context', async (_event, ctxSize: number) => {
   const info = await lemonade.setContextSize(ctxSize)
   if (!info.error) writeSettings(appPath, { contextSize: info.contextSize })
   return info
+})
+
+// Update the reply-length cap (max_completion_tokens) live , no server reload,
+// so a ruminating model can't run until it fills the context window. Persist the
+// choice (dev: settings.local.json; packaged: per-user settings.json) so it
+// survives restarts, then return the refreshed budget for the UI.
+ipcMain.handle('agent:set-max-completion-tokens', async (_event, tokens: number) => {
+  lemonade.setMaxCompletionTokens(tokens)
+  writeSettings(appPath, { maxCompletionTokens: lemonade.replyCap })
+  return lemonade.getContextInfo()
 })
 
 // Models the server knows about, for the model picker.

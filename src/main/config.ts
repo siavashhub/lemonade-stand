@@ -43,6 +43,9 @@ export interface AppConfig {
   contextSize?: number
   /** Tokens reserved for the model's reply when checking the prompt budget. */
   completionReserve: number
+  /** Hard cap on the reply length (max_completion_tokens) sent to the server,
+   * bounding runaway reasoning/output. 0 disables the cap (server default). */
+  maxCompletionTokens: number
   /** System prompt that primes the model to actually call tools. */
   systemPrompt: string
   /** Prompt the user before every MCP tool call (default true). */
@@ -97,6 +100,11 @@ export function loadConfig(cwd: string = process.cwd()): AppConfig {
       saved.contextSize ??
       (process.env.LEMONADE_CONTEXT_SIZE ? Number(process.env.LEMONADE_CONTEXT_SIZE) : undefined),
     completionReserve: Number(process.env.LEMONADE_COMPLETION_RESERVE ?? '512'),
+    // A saved UI choice wins so packaged users can tune the reply cap without
+    // env vars; the env var is only the initial default before they change it.
+    maxCompletionTokens:
+      saved.maxCompletionTokens ??
+      Number(process.env.LEMONADE_MAX_COMPLETION_TOKENS ?? '2048'),
     systemPrompt: process.env.AGENT_SYSTEM_PROMPT ?? DEFAULT_SYSTEM_PROMPT,
     requireApproval: (process.env.AGENT_REQUIRE_APPROVAL ?? 'true') !== 'false',
     compactThreshold: clampFraction(
@@ -173,6 +181,10 @@ export interface AppSettings {
   /** Max tool-calling iterations per user turn before the loop stops. Lets a
    * packaged user tune the safety rail from settings.json without env vars. */
   maxSteps?: number
+  /** Hard cap on reply length (max_completion_tokens) the user last picked in
+   * the UI. Bounds runaway reasoning/output; 0 disables the cap. Restored on
+   * the next launch so the choice survives restarts. */
+  maxCompletionTokens?: number
 }
 
 /** Read one settings file's JSON object; null when the file is absent/malformed. */

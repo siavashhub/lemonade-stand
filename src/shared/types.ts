@@ -166,6 +166,9 @@ export interface ContextInfo {
   maxContextWindow?: number
   /** Tokens held back for the model's reply (not usable by the prompt). */
   reserve: number
+  /** Hard cap on the reply length (max_completion_tokens) sent to the server.
+   * Bounds runaway reasoning/output. 0 means no cap (server default). */
+  maxCompletionTokens: number
   /** Where `contextSize` came from: an explicit override, the loaded model's
    * runtime `ctx_size` reported by the server, or the built-in fallback. */
   source: 'override' | 'server' | 'default'
@@ -476,6 +479,9 @@ export interface RendererApi {
   /** Reload the chat model with a new runtime context size (server `/load`).
    * Returns the refreshed context info, or an `error` string on failure. */
   setContextSize(ctxSize: number): Promise<ContextInfo & { error?: string }>
+  /** Set the reply-length cap (max_completion_tokens) live; 0 disables it.
+   * Returns the refreshed context info reflecting the new cap. */
+  setMaxCompletionTokens(tokens: number): Promise<ContextInfo>
   /** List models the Lemonade server knows about, for the model picker. */
   listModels(): Promise<ModelInfo[]>
   /** Load a model on the server and make it the app's active chat model.
