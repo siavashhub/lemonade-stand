@@ -537,6 +537,38 @@ export class LemonadeClient {
     }
   }
 
+  /**
+   * Unload a model from server memory via the server's /unload, freeing its RAM
+   * while leaving the server running. The model stays on disk and the server
+   * will reload it on demand. Leaves `this.model` untouched: the app's active
+   * chat model is a configuration choice independent of what's resident in
+   * memory, so an unloaded active model simply reloads on the next request.
+   */
+  async unloadModel(id: string): Promise<{ ok: boolean; error?: string }> {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), 60000)
+    try {
+      const response = await fetch(`${this.baseURL}/unload`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...this.authHeaders() },
+        body: JSON.stringify({ model_name: id }),
+        signal: controller.signal
+      })
+      if (!response.ok) {
+        const detail = await response.text().catch(() => '')
+        return {
+          ok: false,
+          error: `Server returned ${response.status}: ${detail || 'unload failed'}`
+        }
+      }
+      return { ok: true }
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+
   /** Normalize a raw /downloads job snapshot into the renderer's DownloadJob. */
   private mapDownload(e: DownloadEntry): DownloadJob {
     const status = (e.status ?? 'downloading') as DownloadJob['status']

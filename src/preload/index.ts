@@ -121,6 +121,10 @@ const api: RendererApi = {
     return ipcRenderer.invoke('agent:load-model', id, ctxSize)
   },
 
+  unloadModel(id: string) {
+    return ipcRenderer.invoke('agent:unload-model', id)
+  },
+
   downloadModel(id: string) {
     return ipcRenderer.invoke('agent:download-model', id)
   },

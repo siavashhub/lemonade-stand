@@ -487,6 +487,10 @@ export interface RendererApi {
   /** Load a model on the server and make it the app's active chat model.
    * Returns the refreshed model list, or throws on failure. */
   loadModel(id: string): Promise<ModelInfo[]>
+  /** Unload a model from server memory to free RAM (server `/unload`). Leaves
+   * it on disk and doesn't change the active chat model. Returns the refreshed
+   * model list, or throws on failure. */
+  unloadModel(id: string): Promise<ModelInfo[]>
   /** Start a background download of a model on the server (server-owned job
    * that survives a renderer reload). Returns the job's initial snapshot. */
   downloadModel(id: string): Promise<DownloadJob>

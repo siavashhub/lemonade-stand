@@ -487,6 +487,15 @@ ipcMain.handle('agent:load-model', async (_event, id: string, ctxSize?: number) 
   return lemonade.listModels()
 })
 
+// Unload a model from server memory to free RAM, leaving it on disk. Returns the
+// refreshed model list so the UI reflects the freed slot. Does not change the
+// app's active chat model.
+ipcMain.handle('agent:unload-model', async (_event, id: string) => {
+  const result = await lemonade.unloadModel(id)
+  if (!result.ok) throw new Error(result.error ?? 'Failed to unload model')
+  return lemonade.listModels()
+})
+
 // Start a server-owned background download of a model. Returns the initial job
 // snapshot; the renderer polls agent:list-downloads for live progress.
 ipcMain.handle('agent:download-model', (_event, id: string) => lemonade.startDownload(id))
@@ -865,6 +874,25 @@ ipcMain.handle('pitcher:run', (_event, id: string): Promise<PitcherRunResult> =>
 })
 
 // --- Lifecycle ---------------------------------------------------------------
+
+// Single-instance: only one copy of the app may run at a time. If a second
+// launch happens (double-clicked shortcut, "Open" again), the OS hands its
+// arguments to the already-running process via the 'second-instance' event and
+// the newcomer exits immediately. Without the lock we'd get duplicate windows
+// fighting over the same config/history files and the local model server.
+const gotSingleInstanceLock = app.requestSingleInstanceLock()
+if (!gotSingleInstanceLock) {
+  app.quit()
+} else {
+  app.on('second-instance', () => {
+    // A second launch was attempted; surface the existing window instead.
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore()
+      mainWindow.show()
+      mainWindow.focus()
+    }
+  })
+}
 
 app.whenReady().then(async () => {
   // Turn on file logging first (when LOG_LEVEL=debug or settings.json's
