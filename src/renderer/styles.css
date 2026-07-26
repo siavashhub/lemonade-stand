@@ -1007,6 +1007,184 @@ body {
   border-color: var(--accent);
 }
 
+/* --- Footer loaded-models control: the Models button plus a count pill that
+   opens a quick switch/unload popover when several models are resident. ------ */
+.models-control {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* "N loaded" pill next to the Models button. Accent-tinted so it reads as a
+   live status, and clickable to open the popover. */
+.loaded-chip {
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-radius: 999px;
+  padding: 2px 9px;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1.4;
+  cursor: pointer;
+  font-variant-numeric: tabular-nums;
+}
+
+.loaded-chip:hover {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+/* The popover itself opens upward from the footer and is anchored to the right
+   edge of the control so it never spills past the window edge. */
+.loaded-pop {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  right: 0;
+  width: 300px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.35);
+  padding: 8px;
+  z-index: 40;
+}
+
+.loaded-pop-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  padding: 4px 8px 8px;
+}
+
+.loaded-pop-x {
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 11px;
+  line-height: 1;
+  padding: 2px 4px;
+}
+
+.loaded-pop-x:hover {
+  color: var(--text);
+}
+
+.loaded-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px;
+  border-radius: 8px;
+}
+
+.loaded-row.active {
+  background: var(--accent-soft);
+}
+
+.loaded-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--ok);
+  flex: none;
+}
+
+.loaded-row.active .loaded-dot {
+  background: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+
+.loaded-row-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.loaded-row-name {
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.loaded-row-meta {
+  font-size: 10px;
+  color: var(--muted);
+  margin-top: 2px;
+}
+
+.loaded-row-badge {
+  font-size: 9px;
+  font-weight: 700;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  padding: 1px 7px;
+  flex: none;
+}
+
+.loaded-row-actions {
+  display: inline-flex;
+  gap: 6px;
+  flex: none;
+}
+
+.loaded-row-link {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 2px 8px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.loaded-row-link:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.loaded-row-link.primary {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.loaded-row-link.primary:hover:not(:disabled) {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+.loaded-row-link:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.loaded-pop-foot {
+  width: 100%;
+  margin-top: 4px;
+  border: none;
+  border-top: 1px solid var(--border);
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  text-align: left;
+  padding: 8px 8px 4px;
+  cursor: pointer;
+}
+
+.loaded-pop-foot:hover {
+  color: var(--accent);
+}
+
 /* The footer speaker toggle is smaller than the top-bar variant to sit neatly
    inline with the text-sized status controls around it. */
 .statusbar-right .speak-toggle {

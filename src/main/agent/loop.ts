@@ -280,6 +280,41 @@ function extractFolderPathFromToolResult(
   return null
 }
 
+// When an image-generation tool fails because the requested image model isn't
+// available on the server, a weak local model tends to ruminate over the opaque
+// error instead of acting (the "overthinks it and takes forever" failure). The
+// Lemonade gateway auto-loads an *installed* image model, but it can't conjure a
+// model that was never pulled , so `lemonade_generate_image` just errors. Turn
+// that dead-end into a decisive, single next action so the model self-corrects
+// in one step: list the installed models, retry with an available image model,
+// or stop and tell the user to install one. Returns null when the failure isn't
+// an image-model-availability problem (so ordinary errors pass through as-is).
+function imageModelRecoveryHint(toolLabel: string, resultText: string): string | null {
+  const isImageTool = /generate[_-]?image|text[_-]?to[_-]?image|txt2img/i.test(toolLabel)
+  if (!isImageTool) return null
+  // Covers both paths: a thrown call ("Tool call failed:") and a returned MCP
+  // error result ("Tool error:"), which don't otherwise set ok=false.
+  const failed = /^Tool (error|call failed):/i.test(resultText)
+  if (!failed) return null
+  const availability =
+    /(not\s*found|not\s*available|unavailable|missing|unknown|no\s*such|does\s*not\s*exist|failed\s*to\s*load|could\s*not\s*(be\s*)?load)/i.test(
+      resultText
+    )
+  if (!availability) return null
+  return (
+    `${resultText}\n\n` +
+    'The requested image model is not available on the server, and the gateway cannot ' +
+    'download one that was never installed. Take ONE of these actions now , do not deliberate ' +
+    'at length or retry the same missing model:\n' +
+    '1. Call lemonade_list_models to see which models are installed.\n' +
+    '2. If any is an image-generation model (its id typically contains "sd", "flux", ' +
+    '"stable-diffusion", or "dream"), call lemonade_generate_image again with that id in the ' +
+    '`model` argument.\n' +
+    '3. If none is installed, tell the user no image model is available and that they can ' +
+    'install one (e.g. `lemonade-server pull <model>`), then stop.'
+  )
+}
+
 // Weak local models sometimes ignore `show_napkin` and instead dump a base64
 // image straight into their reply, as a Markdown image `![alt](data:image/...)`
 // or a bare `data:image/...;base64,...` URL. That never renders in the chat
@@ -887,6 +922,13 @@ export class Agent {
       ok = false
       resultText = `Tool call failed: ${err instanceof Error ? err.message : String(err)}`
     }
+
+    // A failed image-generation call (whether it threw or returned an MCP error
+    // result) over a missing model gets a decisive recovery instruction instead
+    // of the opaque error, so the model lists/retries or stops cleanly rather
+    // than ruminating. No-op for successful calls and non-image failures.
+    const recovery = imageModelRecoveryHint(toolLabel, resultText)
+    if (recovery) resultText = recovery
 
     // Surface any image the tool produced (e.g. lemonade_generate_image) on the
     // napkin panel so the user actually sees it , the bytes are kept out of the

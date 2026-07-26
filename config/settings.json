@@ -1,4 +1,5 @@
 {
   "contextSize": 8192,
-  "maxSteps": 20
+  "maxSteps": 20,
+  "maxCompletionTokens": 2048
 }

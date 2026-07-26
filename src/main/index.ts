@@ -99,7 +99,8 @@ const lemonade = new LemonadeClient(
   config.lemonadeApiKey,
   config.model,
   config.contextSize,
-  config.completionReserve
+  config.completionReserve,
+  config.maxCompletionTokens
 )
 const mcp = new McpManager()
 const agent = new Agent(lemonade, mcp, config.maxSteps, config.systemPrompt, config.compactThreshold)
@@ -463,6 +464,16 @@ ipcMain.handle('agent:set-context', async (_event, ctxSize: number) => {
   return info
 })
 
+// Update the reply-length cap (max_completion_tokens) live , no server reload,
+// so a ruminating model can't run until it fills the context window. Persist the
+// choice (dev: settings.local.json; packaged: per-user settings.json) so it
+// survives restarts, then return the refreshed budget for the UI.
+ipcMain.handle('agent:set-max-completion-tokens', async (_event, tokens: number) => {
+  lemonade.setMaxCompletionTokens(tokens)
+  writeSettings(appPath, { maxCompletionTokens: lemonade.replyCap })
+  return lemonade.getContextInfo()
+})
+
 // Models the server knows about, for the model picker.
 ipcMain.handle('agent:list-models', () => lemonade.listModels())
 
@@ -473,6 +484,15 @@ ipcMain.handle('agent:load-model', async (_event, id: string, ctxSize?: number) 
   const result = await lemonade.loadModel(id, ctxSize)
   if (!result.ok) throw new Error(result.error ?? 'Failed to load model')
   writeSettings(appPath, { model: lemonade.activeModel })
+  return lemonade.listModels()
+})
+
+// Unload a model from server memory to free RAM, leaving it on disk. Returns the
+// refreshed model list so the UI reflects the freed slot. Does not change the
+// app's active chat model.
+ipcMain.handle('agent:unload-model', async (_event, id: string) => {
+  const result = await lemonade.unloadModel(id)
+  if (!result.ok) throw new Error(result.error ?? 'Failed to unload model')
   return lemonade.listModels()
 })
 
@@ -854,6 +874,25 @@ ipcMain.handle('pitcher:run', (_event, id: string): Promise<PitcherRunResult> =>
 })
 
 // --- Lifecycle ---------------------------------------------------------------
+
+// Single-instance: only one copy of the app may run at a time. If a second
+// launch happens (double-clicked shortcut, "Open" again), the OS hands its
+// arguments to the already-running process via the 'second-instance' event and
+// the newcomer exits immediately. Without the lock we'd get duplicate windows
+// fighting over the same config/history files and the local model server.
+const gotSingleInstanceLock = app.requestSingleInstanceLock()
+if (!gotSingleInstanceLock) {
+  app.quit()
+} else {
+  app.on('second-instance', () => {
+    // A second launch was attempted; surface the existing window instead.
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore()
+      mainWindow.show()
+      mainWindow.focus()
+    }
+  })
+}
 
 app.whenReady().then(async () => {
   // Turn on file logging first (when LOG_LEVEL=debug or settings.json's

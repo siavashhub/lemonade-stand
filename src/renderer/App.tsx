@@ -65,7 +65,7 @@ type Theme = 'light' | 'dark'
 // The overlays that can be shown one-at-a-time: top-bar/footer popovers
 // (connection, context, usage) and the full modals (pantry, models, history).
 // A single active-panel value enforces that opening one closes any other.
-type Panel = 'connection' | 'context' | 'usage' | 'pantry' | 'models' | 'history' | 'pitchers' | 'menu'
+type Panel = 'connection' | 'context' | 'replycap' | 'usage' | 'pantry' | 'models' | 'history' | 'pitchers' | 'menu' | 'loaded'
 
 // Convert base64 audio from lemond's TTS into a playable object URL. Rejects
 // (rather than swallowing) so callers can surface a playback failure instead of
@@ -364,6 +364,10 @@ export function App(): JSX.Element {
   // while a model is being loaded into memory.
   const [downloads, setDownloads] = useState<Record<string, DownloadJob>>({})
   const [modelBusyId, setModelBusyId] = useState<string | null>(null)
+  // Snapshot of the server's known models, kept at the shell so the footer can
+  // show which ones are currently loaded in memory (the server can hold several
+  // at once) without opening the full Models panel.
+  const [models, setModels] = useState<ModelInfo[]>([])
   const [thinkingPhrases, setThinkingPhrases] = useState<string[]>([])
   const [thinkingPhrase, setThinkingPhrase] = useState('')
   const [thinkingTick, setThinkingTick] = useState(0)
@@ -445,6 +449,16 @@ export function App(): JSX.Element {
       .catch(() => setContext(null))
   }
 
+  // Re-pull the server's model list so the footer's loaded-models indicator
+  // reflects what's currently resident in memory. Best-effort: on failure (e.g.
+  // server offline) the list simply empties and the indicator hides.
+  function refreshModels(): void {
+    window.api
+      .listModels()
+      .then(setModels)
+      .catch(() => setModels([]))
+  }
+
   // Poll the server's model-download jobs so the status-bar Models button can
   // show live download progress no matter where it was started (or whether the
   // Models panel is open). Finished jobs are cleared from the server so the
@@ -501,6 +515,10 @@ export function App(): JSX.Element {
       )
     : null
   const modelLoading = modelBusyId != null
+  // Models the server currently holds in memory. The server can keep several
+  // resident at once; the footer surfaces this so the user can see and switch
+  // between them without opening the full Models panel.
+  const loadedModels = models.filter((m) => m.loaded)
 
   // Recompute the per-category context usage for the live indicator. Cheap and
   // local (a size estimate in main), so it's safe to call after every turn.
@@ -662,6 +680,7 @@ export function App(): JSX.Element {
     refreshFsRoots()
     window.api.getSpeak().then(setSpeak).catch(() => setSpeak(false))
     refreshContext()
+    refreshModels()
     refreshSessions()
     refreshPitchers()
     window.api.getAppVersion().then(setVersion).catch(() => setVersion(''))
@@ -750,10 +769,28 @@ export function App(): JSX.Element {
         contextSize: info.contextSize,
         maxContextWindow: info.maxContextWindow,
         reserve: info.reserve,
+        maxCompletionTokens: info.maxCompletionTokens,
         source: info.source
       })
       if (info.error) setContextError(info.error)
       else closePanel()
+    } catch (err) {
+      setContextError(String(err))
+    } finally {
+      setContextBusy(false)
+    }
+  }
+
+  // Update the reply-length cap (max_completion_tokens) live. Unlike context
+  // size this needs no server reload , it just changes the value sent on the
+  // next completion , so it applies instantly and persists across restarts.
+  async function applyReplyCap(tokens: number): Promise<void> {
+    setContextBusy(true)
+    setContextError(null)
+    try {
+      const info = await window.api.setMaxCompletionTokens(tokens)
+      setContext(info)
+      closePanel()
     } catch (err) {
       setContextError(String(err))
     } finally {
@@ -771,6 +808,7 @@ export function App(): JSX.Element {
       const result = await window.api.setConnection({ baseUrl, apiKey })
       setServerStatus(result.online ? 'online' : 'offline')
       refreshContext()
+      refreshModels()
       refreshTools()
       if (result.online) closePanel()
       else setConnectionError('Saved, but the server is still unreachable at that URL.')
@@ -802,6 +840,55 @@ export function App(): JSX.Element {
       clearInterval(timer)
     }
   }, [])
+
+  // Refresh the model list whenever the server is online, so the footer's
+  // loaded-models indicator stays live , the server can load or LRU-evict
+  // models on its own (and other clients can too), so we re-poll on a modest
+  // cadence rather than only on in-app actions. The interval is torn down while
+  // offline to avoid pointless failing fetches.
+  useEffect(() => {
+    if (serverStatus !== 'online') return
+    refreshModels()
+    const timer = setInterval(refreshModels, 6000)
+    return () => clearInterval(timer)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [serverStatus])
+
+  // Auto-close the loaded-models popover if the number of resident models drops
+  // to one or fewer (e.g. after an unload) , the quick-switch popover only makes
+  // sense while several are in memory.
+  useEffect(() => {
+    if (activePanel === 'loaded' && loadedModels.length <= 1) closePanel()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activePanel, loadedModels.length])
+
+  // Switch the app's active chat model to an already-loaded one from the footer
+  // popover. Reuses the shell's model-loading busy flag so the status button
+  // shows its "loading…" state during the swap.
+  async function useLoadedModel(id: string): Promise<void> {
+    setModelBusyId(id)
+    try {
+      setModels(await window.api.loadModel(id))
+      refreshContext()
+    } catch {
+      refreshModels()
+    } finally {
+      setModelBusyId(null)
+    }
+  }
+
+  // Free an idle loaded model's memory from the footer popover. Refreshes the
+  // list so the freed model drops out of the loaded set.
+  async function unloadLoadedModel(id: string): Promise<void> {
+    setModelBusyId(id)
+    try {
+      setModels(await window.api.unloadModel(id))
+    } catch {
+      refreshModels()
+    } finally {
+      setModelBusyId(null)
+    }
+  }
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight })
@@ -1506,6 +1593,38 @@ export function App(): JSX.Element {
         )}
         </div>
       </div>
+        </div>
+        {(napkin || napkinChoice) && (
+          <NapkinPanel
+            napkin={napkin}
+            choice={napkinChoice}
+            theme={theme}
+            onChoose={chooseNapkin}
+            onClose={() => setNapkin(null)}
+            onOpenFolder={async (path) => {
+              try {
+                await window.api.openFolderInExplorer(path)
+              } catch (err) {
+                console.error('Failed to open folder:', err)
+                const message = err instanceof Error ? err.message : String(err)
+                window.alert(`Couldn't open folder:\n${path}\n\n${message}`)
+              }
+            }}
+            isAutoCreated={napkin?.kind === 'markdown' && napkin?.content?.includes('📂 **Saved to:**')}
+          />
+        )}
+        {showNapkinCreator && (
+          <NapkinCreatorModal
+            defaultTitle={currentTitle || 'Untitled'}
+            onClose={() => setShowNapkinCreator(false)}
+            onCreateNapkin={(napkin) => {
+              setNapkin(napkin)
+              setEntries((e) => [...e, { kind: 'napkin', napkin }])
+              setShowNapkinCreator(false)
+            }}
+          />
+        )}
+      </div>
 
       <footer className="statusbar">
         {context !== null && (
@@ -1529,6 +1648,33 @@ export function App(): JSX.Element {
                 busy={contextBusy}
                 error={contextError}
                 onApply={applyContextSize}
+                onClose={closePanel}
+              />
+            )}
+          </div>
+        )}
+        {context !== null && (
+          <div className="context-control statusbar-item">
+            <button
+              className="context-size"
+              onClick={() => togglePanel('replycap')}
+              title={
+                (context.maxCompletionTokens > 0
+                  ? `Reply capped at ${context.maxCompletionTokens.toLocaleString()} tokens`
+                  : 'Reply length uncapped (server default)') +
+                '\nBounds runaway reasoning. Click to change'
+              }
+            >
+              {context.maxCompletionTokens > 0
+                ? `${context.maxCompletionTokens.toLocaleString()} reply ▴`
+                : '∞ reply ▴'}
+            </button>
+            {activePanel === 'replycap' && (
+              <ReplyCapEditor
+                info={context}
+                busy={contextBusy}
+                error={contextError}
+                onApply={applyReplyCap}
                 onClose={closePanel}
               />
             )}
@@ -1580,30 +1726,56 @@ export function App(): JSX.Element {
               />
             )}
           </div>
-          <button
-            className={`statusbar-btn ${
-              downloadPercent != null ? 'is-downloading' : modelLoading ? 'is-loading' : ''
-            }`}
-            onClick={() => setActivePanel('models')}
-            title={
-              downloadPercent != null
-                ? `Downloading ${activeDownloads.length} model${activeDownloads.length > 1 ? 's' : ''}… ${downloadPercent}%`
-                : modelLoading
-                  ? 'Loading a model into memory…'
-                  : 'Choose the model the agent runs on'
-            }
-          >
-            <CpuChipIcon /> Models{context?.model ? ` (${context.model})` : ''}
-            {downloadPercent != null && (
-              <span className="statusbar-tag">↓ {downloadPercent}%</span>
+          <div className="statusbar-item models-control">
+            <button
+              className={`statusbar-btn ${
+                downloadPercent != null ? 'is-downloading' : modelLoading ? 'is-loading' : ''
+              }`}
+              onClick={() => setActivePanel('models')}
+              title={
+                downloadPercent != null
+                  ? `Downloading ${activeDownloads.length} model${activeDownloads.length > 1 ? 's' : ''}… ${downloadPercent}%`
+                  : modelLoading
+                    ? 'Loading a model into memory…'
+                    : 'Choose the model the agent runs on'
+              }
+            >
+              <CpuChipIcon /> Models{context?.model ? ` (${context.model})` : ''}
+              {downloadPercent != null && (
+                <span className="statusbar-tag">↓ {downloadPercent}%</span>
+              )}
+              {downloadPercent == null && modelLoading && (
+                <span className="statusbar-tag">loading…</span>
+              )}
+              {downloadPercent != null && (
+                <span className="statusbar-progress" style={{ width: `${downloadPercent}%` }} />
+              )}
+            </button>
+            {/* When the server holds more than one model in memory, offer a
+                count pill that opens a quick switch/unload popover. A single
+                loaded model is the norm, so the pill stays hidden then. */}
+            {loadedModels.length > 1 && (
+              <button
+                className="loaded-chip"
+                onClick={() => togglePanel('loaded')}
+                aria-expanded={activePanel === 'loaded'}
+                title={`${loadedModels.length} models loaded in memory , click to switch or unload`}
+              >
+                {loadedModels.length} loaded
+              </button>
             )}
-            {downloadPercent == null && modelLoading && (
-              <span className="statusbar-tag">loading…</span>
+            {activePanel === 'loaded' && (
+              <LoadedModelsPopover
+                models={loadedModels}
+                activeId={context?.model}
+                busyId={modelBusyId}
+                onUse={(id) => void useLoadedModel(id)}
+                onUnload={(id) => void unloadLoadedModel(id)}
+                onManage={() => setActivePanel('models')}
+                onClose={closePanel}
+              />
             )}
-            {downloadPercent != null && (
-              <span className="statusbar-progress" style={{ width: `${downloadPercent}%` }} />
-            )}
-          </button>
+          </div>
           <button
             className={`bypass-toggle ${bypassApprovals ? 'on' : ''}`}
             onClick={toggleBypassApprovals}
@@ -1629,38 +1801,6 @@ export function App(): JSX.Element {
           </button>
         </div>
       </footer>
-        </div>
-        {(napkin || napkinChoice) && (
-          <NapkinPanel
-            napkin={napkin}
-            choice={napkinChoice}
-            theme={theme}
-            onChoose={chooseNapkin}
-            onClose={() => setNapkin(null)}
-            onOpenFolder={async (path) => {
-              try {
-                await window.api.openFolderInExplorer(path)
-              } catch (err) {
-                console.error('Failed to open folder:', err)
-                const message = err instanceof Error ? err.message : String(err)
-                window.alert(`Couldn't open folder:\n${path}\n\n${message}`)
-              }
-            }}
-            isAutoCreated={napkin?.kind === 'markdown' && napkin?.content?.includes('📂 **Saved to:**')}
-          />
-        )}
-        {showNapkinCreator && (
-          <NapkinCreatorModal
-            defaultTitle={currentTitle || 'Untitled'}
-            onClose={() => setShowNapkinCreator(false)}
-            onCreateNapkin={(napkin) => {
-              setNapkin(napkin)
-              setEntries((e) => [...e, { kind: 'napkin', napkin }])
-              setShowNapkinCreator(false)
-            }}
-          />
-        )}
-      </div>
 
       {activePanel === 'pantry' && (
         <Pantry
@@ -1693,7 +1833,10 @@ export function App(): JSX.Element {
       {activePanel === 'models' && (
         <Models
           onClose={closePanel}
-          onChanged={refreshContext}
+          onChanged={() => {
+            refreshContext()
+            refreshModels()
+          }}
           downloads={downloads}
           busyId={modelBusyId}
           setBusyId={setModelBusyId}
@@ -2053,6 +2196,94 @@ function ContextEditor({
           </span>
           Above the model’s advertised max ({max!.toLocaleString()}). The server may clamp it or
           fail to load.
+        </p>
+      )}
+      {error && <p className="context-editor-err">{error}</p>}
+    </div>
+  )
+}
+
+// Compact popover to set the reply-length cap (max_completion_tokens). Unlike
+// the context editor this doesn't reload the model , it just changes the value
+// sent on the next completion , so it applies instantly. Bounds runaway
+// reasoning: a small local model that ruminates can't generate until it fills
+// the whole context window. 0 (Off) leaves the reply uncapped.
+function ReplyCapEditor({
+  info,
+  busy,
+  error,
+  onApply,
+  onClose
+}: {
+  info: ContextInfo
+  busy: boolean
+  error: string | null
+  onApply: (tokens: number) => void
+  onClose: () => void
+}): JSX.Element {
+  const [value, setValue] = useState(String(info.maxCompletionTokens))
+
+  // Common caps. 0 disables the cap (uncapped, server default).
+  const presets = [0, 512, 1024, 2048, 4096, 8192]
+
+  const parsed = Number(value)
+  // 0 is valid (uncapped); otherwise require a sane minimum so a reply can't be
+  // truncated to uselessness.
+  const valid = Number.isFinite(parsed) && parsed >= 0 && (parsed === 0 || parsed >= 128)
+  const label = (n: number): string => (n === 0 ? 'Off' : n >= 1024 ? `${n / 1024}K` : String(n))
+
+  return (
+    <div className="context-editor" role="dialog" aria-label="Change reply length cap">
+      <div className="context-editor-head">
+        <strong>Reply length cap</strong>
+        <button className="context-editor-close" onClick={onClose} aria-label="Close">
+          ×
+        </button>
+      </div>
+      <p className="context-editor-note">
+        Maximum tokens the model may produce per reply (
+        <code>max_completion_tokens</code>). Bounds runaway reasoning on small
+        models. <strong>Off</strong> uses the server default.
+      </p>
+      <div className="context-presets">
+        {presets.map((p) => (
+          <button
+            key={p}
+            className={Number(value) === p ? 'active' : ''}
+            disabled={busy}
+            onClick={() => setValue(String(p))}
+          >
+            {label(p)}
+          </button>
+        ))}
+      </div>
+      <div className="context-editor-row">
+        <input
+          type="number"
+          min={0}
+          step={128}
+          value={value}
+          disabled={busy}
+          onChange={(e) => setValue(e.target.value)}
+        />
+        <button
+          className="context-apply"
+          disabled={!valid || busy || parsed === info.maxCompletionTokens}
+          onClick={() => onApply(parsed)}
+        >
+          {busy ? 'Saving…' : 'Apply'}
+        </button>
+      </div>
+      {!valid && (
+        <p className="context-editor-err">Enter 0 (Off) or at least 128 tokens.</p>
+      )}
+      {info.maxCompletionTokens > 0 && info.maxCompletionTokens >= info.contextSize && (
+        <p className="context-editor-hint">
+          <span className="context-editor-hint-icon" aria-hidden="true">
+            ⚠
+          </span>
+          The cap is as large as the context window, so it won’t bound the reply
+          in practice.
         </p>
       )}
       {error && <p className="context-editor-err">{error}</p>}
@@ -2464,6 +2695,96 @@ function PitcherEditor({
           Save Pitcher
         </button>
       </div>
+    </div>
+  )
+}
+
+// A compact footer popover listing the models the Lemonade server currently
+// holds in memory (it can keep several resident at once). Lets the user switch
+// the active chat model to another loaded one, or free an idle model's RAM,
+// without opening the full Models panel. Opens upward from the status bar.
+function LoadedModelsPopover({
+  models,
+  activeId,
+  busyId,
+  onUse,
+  onUnload,
+  onManage,
+  onClose
+}: {
+  models: ModelInfo[]
+  /** Id of the app's active chat model, so its row is flagged and pinned first. */
+  activeId?: string
+  /** Id of the model currently loading/unloading, or null. */
+  busyId: string | null
+  onUse: (id: string) => void
+  onUnload: (id: string) => void
+  onManage: () => void
+  onClose: () => void
+}): JSX.Element {
+  // Active model first, then alphabetical, so what you're chatting with leads.
+  const ordered = [...models].sort((a, b) => {
+    const aActive = a.id === activeId
+    const bActive = b.id === activeId
+    if (aActive !== bActive) return aActive ? -1 : 1
+    return a.id.localeCompare(b.id)
+  })
+  const busy = busyId != null
+  return (
+    <div className="loaded-pop" role="dialog" aria-label="Loaded models">
+      <div className="loaded-pop-head">
+        <span>In memory · {models.length}</span>
+        <button className="loaded-pop-x" onClick={onClose} aria-label="Close" title="Close">
+          ✕
+        </button>
+      </div>
+      {ordered.map((m) => {
+        const isActive = m.id === activeId
+        const rowBusy = busyId === m.id
+        const meta = [
+          m.omni ? 'omni' : m.type,
+          m.maxContextWindow ? `${(m.maxContextWindow / 1024).toFixed(0)}K ctx` : null,
+          m.sizeGb ? `${m.sizeGb.toFixed(1)} GB` : null
+        ]
+          .filter(Boolean)
+          .join(' · ')
+        return (
+          <div key={m.id} className={`loaded-row ${isActive ? 'active' : ''}`}>
+            <span className="loaded-dot" />
+            <div className="loaded-row-text">
+              <div className="loaded-row-name" title={m.id}>
+                {m.id}
+              </div>
+              {meta && <div className="loaded-row-meta">{meta}</div>}
+            </div>
+            {isActive ? (
+              <span className="loaded-row-badge">Active</span>
+            ) : (
+              <div className="loaded-row-actions">
+                <button
+                  className="loaded-row-link primary"
+                  disabled={busy}
+                  onClick={() => onUse(m.id)}
+                  title="Make this the active chat model"
+                >
+                  {rowBusy ? '…' : 'Use'}
+                </button>
+                <button
+                  className="loaded-row-link"
+                  disabled={busy}
+                  onClick={() => onUnload(m.id)}
+                  title="Free this model's memory (stays on disk)"
+                >
+                  Unload
+                </button>
+              </div>
+            )}
+          </div>
+        )
+      })}
+      <button className="loaded-pop-foot" onClick={onManage}>
+        Manage all models →
+      </button>
     </div>
   )
 }
