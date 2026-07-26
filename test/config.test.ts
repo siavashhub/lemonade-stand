@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest'
 import { resolve } from 'node:path'
+import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import {
   loadCatalog,
   readServers,
@@ -51,6 +54,60 @@ describe('catalog.json', () => {
       expect(hasPlaceholder, `${entry.id} needsPath but no {{path}} arg`).toBe(true)
       expect(['folder', 'file'], `${entry.id} bad pathKind`).toContain(entry.pathKind)
     }
+  })
+})
+
+describe('loadCatalog merge (bundled vs. per-user copy)', () => {
+  // Write a config/catalog.json with the given entries under a fresh temp dir,
+  // returning that dir so it can be passed to loadCatalog as a config root.
+  function writeCatalog(entries: unknown[]): string {
+    const dir = mkdtempSync(join(tmpdir(), 'lemonade-catalog-'))
+    mkdirSync(join(dir, 'config'), { recursive: true })
+    writeFileSync(join(dir, 'config', 'catalog.json'), JSON.stringify({ entries }), 'utf8')
+    return dir
+  }
+
+  it('refreshes a built-in entry from the bundle over a stale per-user copy', () => {
+    // A user seeded by an older build still has the dead SQLite link on disk.
+    const userDir = writeCatalog([
+      { id: 'sqlite', name: 'SQLite', blurb: 'x', category: 'Data', transport: 'stdio', command: 'uvx', homepage: 'https://example.com/OLD-dead-link' }
+    ])
+    const bundledDir = writeCatalog([
+      { id: 'sqlite', name: 'SQLite', blurb: 'x', category: 'Data', transport: 'stdio', command: 'uvx', homepage: 'https://example.com/FIXED-link' }
+    ])
+    const merged = loadCatalog(userDir, bundledDir)
+    expect(merged.find((e) => e.id === 'sqlite')?.homepage).toBe('https://example.com/FIXED-link')
+  })
+
+  it('preserves user-added entries (ids not in the bundle)', () => {
+    const userDir = writeCatalog([
+      { id: 'sqlite', name: 'SQLite', blurb: 'x', category: 'Data', transport: 'stdio', command: 'uvx' },
+      { id: 'my-custom-tool', name: 'Custom', blurb: 'x', category: 'Custom', transport: 'http', url: 'http://localhost:9999/mcp' }
+    ])
+    const bundledDir = writeCatalog([
+      { id: 'sqlite', name: 'SQLite', blurb: 'x', category: 'Data', transport: 'stdio', command: 'uvx' }
+    ])
+    const merged = loadCatalog(userDir, bundledDir)
+    expect(merged.map((e) => e.id)).toContain('my-custom-tool')
+    // Built-ins come first, user extras kept after them.
+    expect(merged.map((e) => e.id)).toEqual(['sqlite', 'my-custom-tool'])
+  })
+
+  it('reads the single tracked file when bundled and user dirs are the same (dev checkout)', () => {
+    const dir = writeCatalog([
+      { id: 'sqlite', name: 'SQLite', blurb: 'x', category: 'Data', transport: 'stdio', command: 'uvx' }
+    ])
+    expect(loadCatalog(dir, dir).map((e) => e.id)).toEqual(['sqlite'])
+    // Single-arg form behaves the same.
+    expect(loadCatalog(dir).map((e) => e.id)).toEqual(['sqlite'])
+  })
+
+  it('falls back to the user copy when the bundle can not be read', () => {
+    const userDir = writeCatalog([
+      { id: 'sqlite', name: 'SQLite', blurb: 'x', category: 'Data', transport: 'stdio', command: 'uvx' }
+    ])
+    const emptyBundle = mkdtempSync(join(tmpdir(), 'lemonade-empty-'))
+    expect(loadCatalog(userDir, emptyBundle).map((e) => e.id)).toEqual(['sqlite'])
   })
 })
 

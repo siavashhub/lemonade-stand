@@ -387,8 +387,8 @@ export function seedLocalOverrides(cwd: string): void {
   }
 }
 
-/** The Market catalogue of installable tools/skills. */
-export function loadCatalog(cwd: string): CatalogEntry[] {
+/** Read one catalogue file's `entries` array; empty when absent/malformed. */
+function readCatalogFile(cwd: string): CatalogEntry[] {
   try {
     const raw = readFileSync(resolve(cwd, CATALOG_FILE), 'utf8')
     const parsed = JSON.parse(raw) as { entries?: CatalogEntry[] }
@@ -396,6 +396,34 @@ export function loadCatalog(cwd: string): CatalogEntry[] {
   } catch {
     return []
   }
+}
+
+/** Merge the bundled catalogue over a user's copy by entry id. The bundled
+ * (built-in) entries are authoritative and replace their same-id counterparts,
+ * so a shipped correction (e.g. a fixed homepage link) reaches users whose
+ * per-user catalogue was seeded by an older build and is never re-copied. Any
+ * user-added entries — ids not present in the bundle — are preserved and kept
+ * after the built-ins in their original order. */
+function mergeCatalog(bundled: CatalogEntry[], user: CatalogEntry[]): CatalogEntry[] {
+  const bundledIds = new Set(bundled.map((e) => e.id))
+  const extras = user.filter((e) => !bundledIds.has(e.id))
+  return [...bundled, ...extras]
+}
+
+/** The Market catalogue of installable tools/skills. Built-in entries always
+ * come from the bundled defaults so shipped corrections reach existing users,
+ * whose writable per-user copy is seeded once and never re-copied on upgrade;
+ * their own added entries are merged back in by id. Pass the read-only bundled
+ * config dir as `bundledCwd` when it differs from the writable `cwd` (a packaged
+ * build). In a dev checkout the two are the same tree, so this just reads the
+ * single tracked file. */
+export function loadCatalog(cwd: string, bundledCwd: string = cwd): CatalogEntry[] {
+  const user = readCatalogFile(cwd)
+  // Same tree (dev checkout, or seeding fell back to the bundle): no merge.
+  if (resolve(bundledCwd, CATALOG_FILE) === resolve(cwd, CATALOG_FILE)) return user
+  const bundled = readCatalogFile(bundledCwd)
+  // If the bundle can't be read, fall back to whatever the user has on disk.
+  return bundled.length > 0 ? mergeCatalog(bundled, user) : user
 }
 
 /** Build a concrete server config from a catalogue entry, substituting the

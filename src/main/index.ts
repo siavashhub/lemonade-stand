@@ -84,6 +84,14 @@ function resolveConfigDir(): string {
 
 const appPath = resolveConfigDir()
 
+// Read-only bundled defaults ship under `resourcesPath/config` in a packaged
+// build; in a dev checkout they live in the same tree as `appPath`. The Market
+// catalogue's built-in entries are read from here so shipped corrections (e.g. a
+// fixed homepage link) always reach users, even though their writable per-user
+// config is seeded once and never re-copied on upgrade. `loadCatalog` merges any
+// user-added entries from the per-user copy back in by id.
+const bundledConfigPath = app.isPackaged ? process.resourcesPath : appPath
+
 const config = loadConfig(appPath)
 
 // The bundled Memory MCP server (@modelcontextprotocol/server-memory) defaults
@@ -239,7 +247,7 @@ ipcMain.handle('agent:list-tools', () => mcp.getTools())
 
 // Snapshot of every configured server merged with its live connection state.
 function serverStates(): McpServerState[] {
-  const catalog = loadCatalog(appPath)
+  const catalog = loadCatalog(appPath, bundledConfigPath)
   return readServers(appPath).map((s) => {
     const rt = mcp.getRuntime(s.id)
     const entry = catalog.find((c) => c.id === s.id)
@@ -297,7 +305,7 @@ async function reloadServers(): Promise<void> {
   await mcp.connectAll(withGatewayAuth(all.filter((s) => s.enabled)))
 }
 
-ipcMain.handle('catalog:list', () => loadCatalog(appPath))
+ipcMain.handle('catalog:list', () => loadCatalog(appPath, bundledConfigPath))
 ipcMain.handle('servers:list', () => serverStates())
 
 // Playful "agent is working" phrases for the thinking indicator.
@@ -313,12 +321,12 @@ ipcMain.handle(
       // If a new path was supplied, rewrite the server's `{{path}}` arg so the
       // user can change the folder after the server was first configured.
       if (opts.path) {
-        const entry = loadCatalog(appPath).find((c) => c.id === id)
+        const entry = loadCatalog(appPath, bundledConfigPath).find((c) => c.id === id)
         if (entry) updated = withServerPath(entry, updated, opts.path)
       }
       all[idx] = updated
     } else {
-      const entry = loadCatalog(appPath).find((c) => c.id === id)
+      const entry = loadCatalog(appPath, bundledConfigPath).find((c) => c.id === id)
       if (!entry) throw new Error(`Unknown tool "${id}"`)
       const built = serverFromCatalog(entry, opts.path)
       built.enabled = opts.enabled
@@ -542,7 +550,7 @@ ipcMain.on('agent:set-bypass', (_event, enabled: boolean) => {
 // root, so a napkin's folderPath can be relative (e.g. "notes"); we resolve it
 // against these roots before opening.
 function configuredServerRoots(): string[] {
-  const catalog = loadCatalog(appPath)
+  const catalog = loadCatalog(appPath, bundledConfigPath)
   const roots: string[] = []
   for (const server of readServers(appPath)) {
     const entry = catalog.find((c) => c.id === server.id)
