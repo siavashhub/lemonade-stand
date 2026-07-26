@@ -1593,6 +1593,38 @@ export function App(): JSX.Element {
         )}
         </div>
       </div>
+        </div>
+        {(napkin || napkinChoice) && (
+          <NapkinPanel
+            napkin={napkin}
+            choice={napkinChoice}
+            theme={theme}
+            onChoose={chooseNapkin}
+            onClose={() => setNapkin(null)}
+            onOpenFolder={async (path) => {
+              try {
+                await window.api.openFolderInExplorer(path)
+              } catch (err) {
+                console.error('Failed to open folder:', err)
+                const message = err instanceof Error ? err.message : String(err)
+                window.alert(`Couldn't open folder:\n${path}\n\n${message}`)
+              }
+            }}
+            isAutoCreated={napkin?.kind === 'markdown' && napkin?.content?.includes('📂 **Saved to:**')}
+          />
+        )}
+        {showNapkinCreator && (
+          <NapkinCreatorModal
+            defaultTitle={currentTitle || 'Untitled'}
+            onClose={() => setShowNapkinCreator(false)}
+            onCreateNapkin={(napkin) => {
+              setNapkin(napkin)
+              setEntries((e) => [...e, { kind: 'napkin', napkin }])
+              setShowNapkinCreator(false)
+            }}
+          />
+        )}
+      </div>
 
       <footer className="statusbar">
         {context !== null && (
@@ -1769,38 +1801,6 @@ export function App(): JSX.Element {
           </button>
         </div>
       </footer>
-        </div>
-        {(napkin || napkinChoice) && (
-          <NapkinPanel
-            napkin={napkin}
-            choice={napkinChoice}
-            theme={theme}
-            onChoose={chooseNapkin}
-            onClose={() => setNapkin(null)}
-            onOpenFolder={async (path) => {
-              try {
-                await window.api.openFolderInExplorer(path)
-              } catch (err) {
-                console.error('Failed to open folder:', err)
-                const message = err instanceof Error ? err.message : String(err)
-                window.alert(`Couldn't open folder:\n${path}\n\n${message}`)
-              }
-            }}
-            isAutoCreated={napkin?.kind === 'markdown' && napkin?.content?.includes('📂 **Saved to:**')}
-          />
-        )}
-        {showNapkinCreator && (
-          <NapkinCreatorModal
-            defaultTitle={currentTitle || 'Untitled'}
-            onClose={() => setShowNapkinCreator(false)}
-            onCreateNapkin={(napkin) => {
-              setNapkin(napkin)
-              setEntries((e) => [...e, { kind: 'napkin', napkin }])
-              setShowNapkinCreator(false)
-            }}
-          />
-        )}
-      </div>
 
       {activePanel === 'pantry' && (
         <Pantry
