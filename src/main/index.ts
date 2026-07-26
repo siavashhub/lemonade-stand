@@ -82,7 +82,17 @@ function resolveConfigDir(): string {
 }
 
 const appPath = resolveConfigDir()
+
 const config = loadConfig(appPath)
+
+// The bundled Memory MCP server (@modelcontextprotocol/server-memory) defaults
+// its knowledge-graph file to `memory.jsonl` *next to its own module*. In a
+// packaged build that module lives inside the read-only asar, so every write
+// fails with `ENOENT: no such file or directory` , the exact symptom users hit
+// where the memory server reads fine but can't create entities. Point it at the
+// app's writable data dir instead. `??=` respects an explicit override (real env
+// or a `.env` file, already loaded by loadConfig), so a user's own path wins.
+process.env.MEMORY_FILE_PATH ??= join(appPath, 'memory.jsonl')
 const lemonade = new LemonadeClient(
   config.lemonadeBaseUrl,
   config.lemonadeApiKey,
