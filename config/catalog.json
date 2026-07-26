@@ -78,7 +78,7 @@
       "needsPath": true,
       "pathKind": "file",
       "pathLabel": "SQLite database file (.db)",
-      "homepage": "https://github.com/modelcontextprotocol/servers/tree/main/src/sqlite"
+      "homepage": "https://github.com/modelcontextprotocol/servers-archived/tree/main/src/sqlite"
     }
   ]
 }

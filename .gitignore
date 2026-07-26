@@ -27,6 +27,10 @@ config/pitchers.local.json
 # Conversation history written at runtime (dev: project root, packaged: %APPDATA%).
 conversations/
 
+# Knowledge-graph file written at runtime by the Memory MCP server (dev: project
+# root, packaged: %APPDATA%). Set MEMORY_FILE_PATH to relocate it.
+memory.jsonl
+
 # local tests
 temp/
 
