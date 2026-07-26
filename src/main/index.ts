@@ -84,6 +84,14 @@ function resolveConfigDir(): string {
 
 const appPath = resolveConfigDir()
 
+// Read-only bundled defaults ship under `resourcesPath/config` in a packaged
+// build; in a dev checkout they live in the same tree as `appPath`. The Market
+// catalogue's built-in entries are read from here so shipped corrections (e.g. a
+// fixed homepage link) always reach users, even though their writable per-user
+// config is seeded once and never re-copied on upgrade. `loadCatalog` merges any
+// user-added entries from the per-user copy back in by id.
+const bundledConfigPath = app.isPackaged ? process.resourcesPath : appPath
+
 const config = loadConfig(appPath)
 
 // The bundled Memory MCP server (@modelcontextprotocol/server-memory) defaults
@@ -153,6 +161,10 @@ let currentTranscribeAbort: AbortController | null = null
 // The main window, captured in createWindow(). Headless Pitcher pours use it to
 // mirror events to an open UI and to raise desktop notifications.
 let mainWindow: BrowserWindow | null = null
+
+// Guards the periodic MCP reconnect sweep (see whenReady) so a slow attempt
+// can't overlap with the next tick.
+let serverSweepInFlight = false
 
 // Resolve the app icon for the window. In a packaged build resources/ ship as
 // extraResources under process.resourcesPath (they are NOT inside app.asar, so
@@ -235,7 +247,7 @@ ipcMain.handle('agent:list-tools', () => mcp.getTools())
 
 // Snapshot of every configured server merged with its live connection state.
 function serverStates(): McpServerState[] {
-  const catalog = loadCatalog(appPath)
+  const catalog = loadCatalog(appPath, bundledConfigPath)
   return readServers(appPath).map((s) => {
     const rt = mcp.getRuntime(s.id)
     const entry = catalog.find((c) => c.id === s.id)
@@ -293,7 +305,7 @@ async function reloadServers(): Promise<void> {
   await mcp.connectAll(withGatewayAuth(all.filter((s) => s.enabled)))
 }
 
-ipcMain.handle('catalog:list', () => loadCatalog(appPath))
+ipcMain.handle('catalog:list', () => loadCatalog(appPath, bundledConfigPath))
 ipcMain.handle('servers:list', () => serverStates())
 
 // Playful "agent is working" phrases for the thinking indicator.
@@ -309,12 +321,12 @@ ipcMain.handle(
       // If a new path was supplied, rewrite the server's `{{path}}` arg so the
       // user can change the folder after the server was first configured.
       if (opts.path) {
-        const entry = loadCatalog(appPath).find((c) => c.id === id)
+        const entry = loadCatalog(appPath, bundledConfigPath).find((c) => c.id === id)
         if (entry) updated = withServerPath(entry, updated, opts.path)
       }
       all[idx] = updated
     } else {
-      const entry = loadCatalog(appPath).find((c) => c.id === id)
+      const entry = loadCatalog(appPath, bundledConfigPath).find((c) => c.id === id)
       if (!entry) throw new Error(`Unknown tool "${id}"`)
       const built = serverFromCatalog(entry, opts.path)
       built.enabled = opts.enabled
@@ -538,7 +550,7 @@ ipcMain.on('agent:set-bypass', (_event, enabled: boolean) => {
 // root, so a napkin's folderPath can be relative (e.g. "notes"); we resolve it
 // against these roots before opening.
 function configuredServerRoots(): string[] {
-  const catalog = loadCatalog(appPath)
+  const catalog = loadCatalog(appPath, bundledConfigPath)
   const roots: string[] = []
   for (const server of readServers(appPath)) {
     const entry = catalog.find((c) => c.id === server.id)
@@ -922,8 +934,42 @@ app.whenReady().then(async () => {
   // window has no menu bar to show it in anyway.
   Menu.setApplicationMenu(null)
 
-  await mcp.connectAll(withGatewayAuth(config.servers))
+  // Show the window first, THEN connect MCP servers. In a packaged build the
+  // network stack isn't reliably ready the instant whenReady() fires, so an
+  // HTTP MCP connect (the Lemonade Gateway) attempted before the first window
+  // could fail with a transient "fetch failed" , which is exactly why users saw
+  // the gateway stuck on "can't reach this server" until they toggled it. This
+  // also keeps the connect's retry/backoff off the window's critical path so a
+  // genuinely-offline server never delays the UI appearing.
   createWindow()
+
+  await mcp.connectAll(withGatewayAuth(config.servers))
+
+  // Background reconnect sweep. The Lemonade Gateway MCP entry depends on the
+  // Lemonade server, which a user may start AFTER the app. The server-status
+  // indicator already recovers on its own (the renderer re-probes /health every
+  // few seconds), but an MCP entry that failed its initial connect used to stay
+  // stuck on "can't reach this server" until it was manually toggled off and on.
+  // Periodically retry any enabled-but-disconnected server so the gateway heals
+  // the same way the status pill does, and notify the renderer when something
+  // newly connects so the Pantry and the agent's tool list refresh live.
+  setInterval(() => {
+    if (serverSweepInFlight) return
+    serverSweepInFlight = true
+    void (async () => {
+      try {
+        const enabled = withGatewayAuth(readServers(appPath).filter((s) => s.enabled))
+        const changed = await mcp.connectMissing(enabled)
+        if (changed && mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('servers:changed')
+        }
+      } catch {
+        // Best-effort; the next tick tries again.
+      } finally {
+        serverSweepInFlight = false
+      }
+    })()
+  }, 5000)
 
   // Arm scheduled Pitchers now that the window exists: runs on-open tasks and
   // any daily task whose time was missed while the app was closed, then keeps
