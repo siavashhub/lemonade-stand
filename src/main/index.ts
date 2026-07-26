@@ -7,6 +7,7 @@ import type {
   AgentEvent,
   ApprovalDecision,
   ChatMessage,
+  McpServerConfig,
   McpServerState,
   Napkin,
   Pitcher,
@@ -249,12 +250,46 @@ function serverStates(): McpServerState[] {
   })
 }
 
+// The Lemonade Gateway MCP server ("/mcp") is the running lemond's OWN endpoint,
+// so when that server is launched with an API key the gateway enforces it too.
+// The MCP Streamable HTTP transport only sends a server's explicit `headers`,
+// which the default gateway entry omits , so a key-protected server rejects the
+// connection with "Invalid or missing API key". Attach the configured Bearer
+// token to any HTTP server whose URL shares the Lemonade base URL's origin (and
+// ONLY that origin, so the key never leaks to unrelated third-party HTTP MCP
+// servers), unless the entry already sets its own Authorization header.
+function withGatewayAuth(servers: McpServerConfig[]): McpServerConfig[] {
+  const { baseUrl, apiKey } = lemonade.connection
+  if (!apiKey) return servers
+  let gatewayOrigin: string
+  try {
+    gatewayOrigin = new URL(baseUrl).origin
+  } catch {
+    return servers
+  }
+  return servers.map((s) => {
+    if (s.transport !== 'http') return s
+    let sameOrigin = false
+    try {
+      sameOrigin = new URL(s.url).origin === gatewayOrigin
+    } catch {
+      sameOrigin = false
+    }
+    if (!sameOrigin) return s
+    const hasAuth = s.headers
+      ? Object.keys(s.headers).some((k) => k.toLowerCase() === 'authorization')
+      : false
+    if (hasAuth) return s
+    return { ...s, headers: { ...s.headers, Authorization: `Bearer ${apiKey}` } }
+  })
+}
+
 // Reconnect only the enabled servers from the current on-disk config. Called
 // after any change so tool availability tracks the user's choices live.
 async function reloadServers(): Promise<void> {
   const all = readServers(appPath)
   await mcp.closeAll()
-  await mcp.connectAll(all.filter((s) => s.enabled))
+  await mcp.connectAll(withGatewayAuth(all.filter((s) => s.enabled)))
 }
 
 ipcMain.handle('catalog:list', () => loadCatalog(appPath))
@@ -390,6 +425,10 @@ ipcMain.handle(
     }
     lemonade.setConnection(baseUrl, apiKey)
     writeSettings(appPath, { baseUrl, apiKey })
+    // Reconnect so the Lemonade Gateway ("/mcp") picks up the new key/origin:
+    // its Authorization header is derived from this connection, so a stale
+    // connection would keep failing with "Invalid or missing API key".
+    await reloadServers()
     const online = await lemonade.health()
     return { baseUrl, apiKey, online }
   }
@@ -844,7 +883,7 @@ app.whenReady().then(async () => {
   // window has no menu bar to show it in anyway.
   Menu.setApplicationMenu(null)
 
-  await mcp.connectAll(config.servers)
+  await mcp.connectAll(withGatewayAuth(config.servers))
   createWindow()
 
   // Arm scheduled Pitchers now that the window exists: runs on-open tasks and
