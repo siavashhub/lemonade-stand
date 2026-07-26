@@ -273,7 +273,11 @@ export class McpManager {
   // Gateway's common startup race) self-heals instead of stranding the entry in
   // an error state until the user toggles it off and on. A fresh transport is
   // built per attempt since a failed connect leaves the previous one unusable.
-  private async connectHttp(client: Client, server: McpServerConfig, attempts: number): Promise<void> {
+  private async connectHttp(
+    client: Client,
+    server: Extract<McpServerConfig, { transport: 'http' }>,
+    attempts: number
+  ): Promise<void> {
     for (let attempt = 1; ; attempt++) {
       const transport = new StreamableHTTPClientTransport(new URL(server.url), {
         requestInit: server.headers ? { headers: server.headers } : undefined
