@@ -3281,7 +3281,27 @@ function Pantry({
 
 function ServerStatusRow({ state }: { state: McpServerState | undefined }): JSX.Element | null {
   if (!state || !state.enabled) return null
-  if (state.error) return <div className="card-status err">Failed to connect: {state.error}</div>
+  if (state.error) {
+    // A bare "fetch failed" (or a raw ECONNREFUSED/ENOTFOUND) from an HTTP server
+    // means the endpoint couldn't be reached at all , the server is down, on a
+    // different port, or its gateway isn't exposed , which is opaque to a user.
+    // Swap it for a plain-language hint, keeping the raw error on hover for
+    // debugging. The Lemonade Gateway is a common case: chat works on /api/v1
+    // while the separate /mcp gateway isn't running.
+    const unreachable =
+      state.transport === 'http' && /fetch failed|ECONNREFUSED|ENOTFOUND|ETIMEDOUT/i.test(state.error)
+    if (unreachable) {
+      return (
+        <div className="card-status err" title={state.error}>
+          Can't reach this server.{' '}
+          {state.id === 'lemonade'
+            ? 'Make sure your Lemonade server is running and its /mcp gateway is enabled, then toggle this entry off and on.'
+            : 'Check that the server is running at its configured URL, then toggle this entry off and on.'}
+        </div>
+      )
+    }
+    return <div className="card-status err">Failed to connect: {state.error}</div>
+  }
   if (state.connected)
     return (
       <div className="card-status ok">
