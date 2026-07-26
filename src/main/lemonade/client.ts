@@ -184,6 +184,16 @@ export class LemonadeClient {
   }
 
   /**
+   * Build the headers for our raw `/health` probes. The OpenAI SDK attaches the
+   * key to chat/model calls for us, but these hand-rolled `fetch`es don't go
+   * through it, so we must send `Authorization` ourselves , otherwise a server
+   * launched with an API key answers /health with 401 and the app looks offline.
+   */
+  private authHeaders(): Record<string, string> {
+    return this.apiKey ? { Authorization: `Bearer ${this.apiKey}` } : {}
+  }
+
+  /**
    * Probe the running lemond via its OpenAI-compatible `/health` endpoint.
    * Returns true only on a 2xx response within the timeout; any network error
    * (server not running) or non-2xx status resolves to false rather than
@@ -195,6 +205,7 @@ export class LemonadeClient {
     try {
       const response = await fetch(`${this.baseURL}/health`, {
         method: 'GET',
+        headers: this.authHeaders(),
         signal: controller.signal
       })
       return response.ok
@@ -217,6 +228,7 @@ export class LemonadeClient {
     try {
       const response = await fetch(`${this.baseURL}/health`, {
         method: 'GET',
+        headers: this.authHeaders(),
         signal: controller.signal
       })
       if (!response.ok) return null
@@ -282,6 +294,7 @@ export class LemonadeClient {
       try {
         const response = await fetch(`${this.baseURL}/models`, {
           method: 'GET',
+          headers: this.authHeaders(),
           signal: controller.signal
         })
         if (response.ok) {
@@ -307,6 +320,7 @@ export class LemonadeClient {
       try {
         const response = await fetch(`${this.baseURL}/models?show_all=true`, {
           method: 'GET',
+          headers: this.authHeaders(),
           signal: controllerAll.signal
         })
         if (response.ok) {
@@ -331,6 +345,7 @@ export class LemonadeClient {
       try {
         const health = await fetch(`${this.baseURL}/health`, {
           method: 'GET',
+          headers: this.authHeaders(),
           signal: controller2.signal
         })
         if (health.ok) {
@@ -418,7 +433,7 @@ export class LemonadeClient {
     try {
       const response = await fetch(`${this.baseURL}/load`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...this.authHeaders() },
         body: JSON.stringify({ model_name: id, ctx_size: ctxSize }),
         signal: controller.signal
       })
@@ -450,7 +465,7 @@ export class LemonadeClient {
     try {
       const response = await fetch(`${this.baseURL}/pull`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...this.authHeaders() },
         body: JSON.stringify({ model_name: id, stream: false }),
         signal: controller.signal
       })
@@ -478,7 +493,7 @@ export class LemonadeClient {
     try {
       const response = await fetch(`${this.baseURL}/delete`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...this.authHeaders() },
         body: JSON.stringify({ model_name: id }),
         signal: controller.signal
       })
@@ -535,7 +550,7 @@ export class LemonadeClient {
     try {
       const response = await fetch(`${this.baseURL}/pull`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...this.authHeaders() },
         body: JSON.stringify({ model_name: id, stream: true, subscribe: false }),
         signal: controller.signal
       })
@@ -557,6 +572,7 @@ export class LemonadeClient {
     try {
       const response = await fetch(`${this.baseURL}/downloads`, {
         method: 'GET',
+        headers: this.authHeaders(),
         signal: controller.signal
       })
       if (!response.ok) return []
@@ -576,7 +592,7 @@ export class LemonadeClient {
     try {
       await fetch(`${this.baseURL}/downloads/control`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...this.authHeaders() },
         body: JSON.stringify({ id, action }),
         signal: controller.signal
       })
@@ -594,6 +610,7 @@ export class LemonadeClient {
     try {
       const response = await fetch(`${this.baseURL}/models/${encodeURIComponent(id)}`, {
         method: 'GET',
+        headers: this.authHeaders(),
         signal: controller.signal
       })
       if (!response.ok) return null
@@ -708,7 +725,7 @@ export class LemonadeClient {
       }
       const response = await fetch(`${this.baseURL}/load`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...this.authHeaders() },
         body: JSON.stringify({ model_name: target, ctx_size: ctxSize, save_options: saveOptions }),
         signal: controller.signal
       })
