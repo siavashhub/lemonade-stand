@@ -1055,7 +1055,13 @@ async function pourPitcher(p: Pitcher): Promise<PitcherRunResult> {
 
   if (idx >= 0) {
     list[idx] = stopped
-      ? { ...list[idx], lastStatus: 'stopped', lastError: undefined, lastSessionId: sessionId }
+      ? {
+          ...list[idx],
+          lastStoppedAt: now,
+          lastStatus: 'stopped',
+          lastError: undefined,
+          lastSessionId: sessionId
+        }
       : failed
         ? { ...list[idx], lastStatus: 'error', lastError: error, lastSessionId: sessionId }
         : {

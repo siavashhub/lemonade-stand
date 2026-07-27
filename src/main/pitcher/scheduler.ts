@@ -11,14 +11,18 @@ function nextDailyAt(at: string, now = new Date()): number {
 }
 
 // True when a daily Pitcher's most recent scheduled time has already passed and
-// we have no record of pouring it since, i.e. the app was closed at that time.
+// we have no record of handling it since, i.e. the app was closed at that time.
+// A fire counts as "handled" if it was either successfully poured (lastRunAt) or
+// deliberately stopped by the user (lastStoppedAt), so a pour you manually
+// stopped is not caught up and re-run on the next launch.
 function missedDaily(p: Pitcher, now = new Date()): boolean {
   if (p.trigger.type !== 'daily') return false
   const [h, m] = p.trigger.at.split(':').map((n) => parseInt(n, 10))
   const todaysFire = new Date(now)
   todaysFire.setHours(h, m, 0, 0)
   if (todaysFire.getTime() > now.getTime()) return false // hasn't come round yet today
-  return (p.lastRunAt ?? 0) < todaysFire.getTime()
+  const handledSince = Math.max(p.lastRunAt ?? 0, p.lastStoppedAt ?? 0)
+  return handledSince < todaysFire.getTime()
 }
 
 /**

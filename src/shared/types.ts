@@ -347,6 +347,10 @@ export interface Pitcher {
   allowedTools: string[]
   /** Epoch ms of the last successful pour, for daily catch-up on launch. */
   lastRunAt?: number
+  /** Epoch ms of the last user-initiated Stop. Like `lastRunAt`, it marks a
+   * daily fire as "handled" so a pour you deliberately stopped isn't caught up
+   * and re-run on the next launch. */
+  lastStoppedAt?: number
   lastStatus?: 'ok' | 'error' | 'stopped'
   lastError?: string
   /** Saved conversation id of the most recent pour (success OR failure), so the
