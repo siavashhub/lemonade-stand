@@ -263,6 +263,48 @@ function serverStates(): McpServerState[] {
   })
 }
 
+// Id of the built-in Lemonade Gateway entry (see config/catalog.json). Its "/mcp"
+// endpoint is the running Lemonade server's OWN, so it must always live on the
+// same host/port as the chat API.
+const GATEWAY_SERVER_ID = 'lemonade'
+
+// Derive the gateway's "/mcp" URL from the chat base URL. Base URLs end in the
+// REST version prefix (".../api/v1"); swap that final segment for the sibling
+// "/mcp" path, preserving any reverse-proxy prefix (so
+// "http://host/lemonade/api/v1" -> "http://host/lemonade/mcp"). Falls back to
+// "<origin>/mcp" when the path doesn't match that shape. Returns undefined for
+// an unparseable base URL.
+function gatewayUrlFromBase(baseUrl: string): string | undefined {
+  let u: URL
+  try {
+    u = new URL(baseUrl)
+  } catch {
+    return undefined
+  }
+  const path = u.pathname.replace(/\/+$/, '')
+  const mcpPath = /\/api\/v\d+$/.test(path) ? path.replace(/\/api\/v\d+$/, '/mcp') : '/mcp'
+  return `${u.origin}${mcpPath}`
+}
+
+// The built-in Lemonade Gateway is the running Lemonade server's own endpoint,
+// so it can never live anywhere but the host the chat API points at. The catalog
+// ships it as `http://localhost:13305/mcp`, but when the user repoints chat at a
+// different host (e.g. a Lemonade server on another machine on the LAN) a
+// hardcoded `localhost` gateway can never connect , the exact reason cross-machine
+// setups saw the gateway stuck on "can't reach this server". Rewrite the gateway
+// entry's URL to follow the live chat connection so the two always track together
+// without any hand-editing. Only the built-in gateway id is touched; user-added
+// HTTP servers keep their own URLs.
+function withGatewayUrl(servers: McpServerConfig[]): McpServerConfig[] {
+  const derived = gatewayUrlFromBase(lemonade.connection.baseUrl)
+  if (!derived) return servers
+  return servers.map((s) =>
+    s.id === GATEWAY_SERVER_ID && s.transport === 'http' && s.url !== derived
+      ? { ...s, url: derived }
+      : s
+  )
+}
+
 // The Lemonade Gateway MCP server ("/mcp") is the running lemond's OWN endpoint,
 // so when that server is launched with an API key the gateway enforces it too.
 // The MCP Streamable HTTP transport only sends a server's explicit `headers`,
@@ -297,12 +339,21 @@ function withGatewayAuth(servers: McpServerConfig[]): McpServerConfig[] {
   })
 }
 
+// Prepare the on-disk server list for connecting: first point the built-in
+// Lemonade Gateway at the currently-configured chat host, then attach the
+// gateway's API key. Order matters , the auth step matches servers by the
+// Lemonade base URL's origin, so the URL must be rewritten to that host first
+// for the key to land on a cross-machine gateway.
+function prepareServers(servers: McpServerConfig[]): McpServerConfig[] {
+  return withGatewayAuth(withGatewayUrl(servers))
+}
+
 // Reconnect only the enabled servers from the current on-disk config. Called
 // after any change so tool availability tracks the user's choices live.
 async function reloadServers(): Promise<void> {
   const all = readServers(appPath)
   await mcp.closeAll()
-  await mcp.connectAll(withGatewayAuth(all.filter((s) => s.enabled)))
+  await mcp.connectAll(prepareServers(all.filter((s) => s.enabled)))
 }
 
 ipcMain.handle('catalog:list', () => loadCatalog(appPath, bundledConfigPath))
@@ -943,7 +994,7 @@ app.whenReady().then(async () => {
   // genuinely-offline server never delays the UI appearing.
   createWindow()
 
-  await mcp.connectAll(withGatewayAuth(config.servers))
+  await mcp.connectAll(prepareServers(config.servers))
 
   // Background reconnect sweep. The Lemonade Gateway MCP entry depends on the
   // Lemonade server, which a user may start AFTER the app. The server-status
@@ -958,7 +1009,7 @@ app.whenReady().then(async () => {
     serverSweepInFlight = true
     void (async () => {
       try {
-        const enabled = withGatewayAuth(readServers(appPath).filter((s) => s.enabled))
+        const enabled = prepareServers(readServers(appPath).filter((s) => s.enabled))
         const changed = await mcp.connectMissing(enabled)
         if (changed && mainWindow && !mainWindow.isDestroyed()) {
           mainWindow.webContents.send('servers:changed')
