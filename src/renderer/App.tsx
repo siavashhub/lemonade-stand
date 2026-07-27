@@ -18,6 +18,7 @@ import type {
   NapkinKind,
   Pitcher,
   PitcherEvent,
+  PitcherProposal,
   PlanStep,
   SessionSummary,
   TranscriptEntry
@@ -340,6 +341,13 @@ export function App(): JSX.Element {
     prompt: string
     choices: NapkinChoice[]
   } | null>(null)
+  // A model-proposed scheduled task awaiting the user's review in a pre-filled
+  // editor. The agent loop is blocked until the user saves or cancels; null when
+  // there's no open proposal.
+  const [pitcherProposal, setPitcherProposal] = useState<{
+    id: string
+    draft: PitcherProposal
+  } | null>(null)
   // User-initiated napkin creation form; shown when the side button is clicked.
   const [showNapkinCreator, setShowNapkinCreator] = useState(false)
   const [serverStatus, setServerStatus] = useState<ServerStatus>('checking')
@@ -609,6 +617,7 @@ export function App(): JSX.Element {
     setPlanExpanded(false)
     setNapkin(null)
     setNapkinChoice(null)
+    cancelProposedPitcher()
     // Move focus to the composer so the user can immediately start typing
     // instead of leaving focus on the button (which would swallow keystrokes).
     requestAnimationFrame(() => inputRef.current?.focus())
@@ -637,6 +646,7 @@ export function App(): JSX.Element {
         setPlanExpanded(false)
         setNapkin(null)
         setNapkinChoice(null)
+        cancelProposedPitcher()
         closePanel()
       })
       .catch(() => {})
@@ -691,11 +701,13 @@ export function App(): JSX.Element {
   }, [])
 
   // Keep the Pitchers list fresh as scheduled/manual pours change their status,
-  // and refresh the history list when a pour saves a new conversation.
+  // and refresh the history list when a pour saves a new conversation. Every
+  // pour , success OR failure , now saves a conversation, so refresh on any
+  // finish so a failed run's transcript shows up in History too.
   useEffect(() => {
     return window.api.onPitcherEvent((evt: PitcherEvent) => {
       refreshPitchers()
-      if (evt.type === 'pitcher_finished' && evt.ok) refreshSessions()
+      if (evt.type === 'pitcher_finished') refreshSessions()
     })
   }, [])
 
@@ -969,6 +981,29 @@ export function App(): JSX.Element {
     setNapkinChoice(null)
   }
 
+  // Answer a pending create_pitcher proposal. Saving persists the reviewed task
+  // (with whatever tool whitelist the user granted) and reports success back to
+  // the blocked agent loop; cancelling reports a decline. Either way the loop
+  // resumes.
+  async function saveProposedPitcher(p: Pitcher): Promise<void> {
+    if (!pitcherProposal) return
+    const { id } = pitcherProposal
+    try {
+      setPitchers(await window.api.savePitcher(p))
+    } finally {
+      window.api.respondPitcherProposal(id, { saved: true, name: p.name })
+      setPitcherProposal(null)
+    }
+  }
+  function cancelProposedPitcher(): void {
+    if (!pitcherProposal) return
+    window.api.respondPitcherProposal(pitcherProposal.id, {
+      saved: false,
+      name: pitcherProposal.draft.name
+    })
+    setPitcherProposal(null)
+  }
+
   async function toggleSpeak(): Promise<void> {
     const next = await window.api.setSpeak(!speak)
     setSpeak(next)
@@ -1195,6 +1230,11 @@ export function App(): JSX.Element {
           prompt: event.prompt,
           choices: event.choices
         })
+      } else if (event.type === 'pitcher_proposal_request') {
+        // The agent proposed a scheduled task. Open a pre-filled editor; the
+        // loop stays blocked until saveProposedPitcher()/cancelProposedPitcher()
+        // answers. The user reviews the trigger and grants the tool whitelist.
+        setPitcherProposal({ id: event.id, draft: event.draft })
       } else if (event.type === 'context_usage') {
         // Live in-flight prompt size (tool calls/results included) , keep the
         // usage badge honest while the agent works, not just between turns.
@@ -1842,6 +1882,46 @@ export function App(): JSX.Element {
           onClose={closePanel}
         />
       )}
+      {pitcherProposal && (
+        <div className="pantry-overlay history-overlay" onClick={cancelProposedPitcher}>
+          <aside className="pantry history-panel" onClick={(e) => e.stopPropagation()}>
+            <header className="pantry-head">
+              <div>
+                <h2>
+                  <PitcherIcon /> Review scheduled task
+                </h2>
+                <p className="pantry-sub">
+                  The agent drafted this Pitcher and pre-selected the tools it needs. Review the
+                  trigger and tools, then save it , nothing is scheduled until you do.
+                </p>
+              </div>
+              <button
+                className="pantry-close"
+                onClick={cancelProposedPitcher}
+                aria-label="Close"
+                title="Close"
+              >
+                ✕
+              </button>
+            </header>
+            <PitcherEditor
+              key={pitcherProposal.id}
+              initial={{
+                id: crypto.randomUUID(),
+                name: pitcherProposal.draft.name,
+                enabled: true,
+                prompt: pitcherProposal.draft.prompt,
+                trigger: pitcherProposal.draft.trigger,
+                output: pitcherProposal.draft.output,
+                allowedTools: pitcherProposal.draft.allowedTools
+              }}
+              tools={tools}
+              onCancel={cancelProposedPitcher}
+              onSave={saveProposedPitcher}
+            />
+          </aside>
+        </div>
+      )}
       {activePanel === 'models' && (
         <Models
           onClose={closePanel}
@@ -2440,7 +2520,7 @@ function Pitchers({
     enabled: true,
     prompt: 'Fetch a website and summarize the key points in a few bullets.',
     trigger: { type: 'daily', at: '08:00' },
-    output: 'napkin',
+    output: 'chat',
     allowedTools: []
   })
 
@@ -2519,12 +2599,33 @@ function Pitchers({
                     </span>
                     <span className="history-meta">
                       {describeTrigger(p)} · serves {p.output}
-                      {p.lastStatus === 'error' && ' · ⚠ last run failed'}
+                      {p.lastStatus === 'error' && (
+                        <span className="pitcher-failed">
+                          {' · ⚠ failed'}
+                          {p.lastError
+                            ? `: ${p.lastError.length > 80 ? `${p.lastError.slice(0, 80)}…` : p.lastError}`
+                            : ''}
+                        </span>
+                      )}
                       {p.lastStatus === 'ok' && p.lastRunAt
                         ? ` · last ${new Date(p.lastRunAt).toLocaleString()}`
                         : ''}
                     </span>
                   </button>
+                  {p.lastSessionId && (
+                    <button
+                      className="history-del"
+                      onClick={() => onOpenSession(p.lastSessionId!)}
+                      aria-label="Open last run"
+                      title={
+                        p.lastStatus === 'error'
+                          ? "Open the failed run's conversation to see what happened"
+                          : "Open the last run's conversation"
+                      }
+                    >
+                      {p.lastStatus === 'error' ? '⚠' : '🗒'}
+                    </button>
+                  )}
                   <button
                     className="history-del"
                     onClick={() => pour(p.id)}
@@ -2693,6 +2794,12 @@ function PitcherEditor({
             </label>
           ))}
         </div>
+        {tools.length > 0 && (
+          <em className="pitcher-hint">
+            Don&apos;t see a tool you need? Enable its server in the Pantry, then reopen this
+            editor , only connected tools can be added.
+          </em>
+        )}
       </div>
 
       <div className="pitcher-actions">

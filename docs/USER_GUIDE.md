@@ -177,6 +177,7 @@ file**. Requires `uvx`.
   - **Dual output**: serve poured results to the **Napkin** panel (rich artifacts) or save as a **conversation** in history
   - **Desktop notifications** when results are ready and the window isn't focused
   - **Managed from a new Pitchers panel**: create, edit, enable/disable, manually "Pour now", and see last-run status + errors
+  - **Create from chat**: just ask the agent to schedule, automate, or repeat a task (e.g. "every morning at 8, fetch example.com and summarize the headlines"). It drafts a Pitcher, pre-selects the tools it needs, and opens a pre-filled editor for you to review the trigger and tools and save. Nothing is scheduled until you confirm, and you can add or remove any pre-selected tool first
   - **Graceful serialization**: pours never collide with interactive chat turns; they queue and run when the user isn't typing
 
 ## Quick test checklist

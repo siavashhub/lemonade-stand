@@ -32,7 +32,7 @@ import {
 } from './config'
 import { LemonadeClient } from './lemonade/client'
 import { McpManager } from './mcp/manager'
-import { Agent, type ApproveFn, type AskNapkinFn, type ContinueFn } from './agent/loop'
+import { Agent, type ApproveFn, type AskNapkinFn, type ContinueFn, type ProposePitcherFn } from './agent/loop'
 import { PitcherScheduler } from './pitcher/scheduler'
 import { initFileLogging } from './logger'
 import {
@@ -151,6 +151,14 @@ const pendingLimits = new Map<string, (cont: boolean) => void>()
 // picks an option in the Napkin panel; the reply arrives on the
 // 'agent:napkin-choice' channel.
 const pendingNapkinChoices = new Map<string, (choiceId: string) => void>()
+
+// In-flight create_pitcher proposals: id -> resolver. The agent loop awaits
+// these while the user reviews a pre-filled Pitcher editor; the renderer
+// resolves via the 'agent:pitcher-proposal-result' channel.
+const pendingPitcherProposals = new Map<
+  string,
+  (result: { saved: boolean; name: string }) => void
+>()
 
 // Abort handles for work the user can halt mid-flight. The renderer's stop
 // button signals these via the 'agent:cancel' / 'agent:cancel-transcribe'
@@ -665,6 +673,19 @@ ipcMain.on('agent:napkin-choice', (_event, id: string, choiceId: string) => {
   }
 })
 
+// Renderer's answer to a pitcher_proposal_request: whether the user saved the
+// pre-filled scheduled task. Resolving the stored promise unblocks the loop.
+ipcMain.on(
+  'agent:pitcher-proposal-result',
+  (_event, id: string, result: { saved: boolean; name: string }) => {
+    const resolve = pendingPitcherProposals.get(id)
+    if (resolve) {
+      pendingPitcherProposals.delete(id)
+      resolve(result)
+    }
+  }
+)
+
 // Compact one-line description of an agent event for the debug log, so a full
 // turn (model completions, tool calls, plan updates, budget) can be read back
 // from the log file when diagnosing a run.
@@ -683,6 +704,8 @@ function describeEvent(e: AgentEvent): string {
       return `napkin_show kind=${e.napkin.kind} title=${e.napkin.title} len=${e.napkin.content.length}`
     case 'napkin_choice_request':
       return `napkin_choice_request choices=${e.choices.length} prompt=${e.prompt.slice(0, 80)}`
+    case 'pitcher_proposal_request':
+      return `pitcher_proposal_request name=${e.draft.name} trigger=${e.draft.trigger.type}`
     case 'assistant_text':
       return `assistant_text len=${e.text.trim().length}`
     case 'reasoning':
@@ -782,10 +805,21 @@ ipcMain.handle('agent:send', async (event, messages: ChatMessage[]) => {
     })
   }
 
+  // Propose-pitcher callback: open a pre-filled Pitcher editor in the renderer
+  // and await the user's decision. Only ever passed to this interactive turn ,
+  // pours never get it , so a scheduled task can't create more scheduled tasks.
+  const proposePitcher: ProposePitcherFn = (draft) => {
+    const id = randomUUID()
+    send({ type: 'pitcher_proposal_request', id, draft })
+    return new Promise<{ saved: boolean; name: string }>((resolve) => {
+      pendingPitcherProposals.set(id, resolve)
+    })
+  }
+
   const abort = new AbortController()
   currentAgentAbort = abort
   try {
-    await agent.run(messages, emit, approve, abort.signal, onLimit, askNapkin)
+    await agent.run(messages, emit, approve, abort.signal, onLimit, askNapkin, proposePitcher)
   } finally {
     if (currentAgentAbort === abort) currentAgentAbort = null
   }
@@ -800,6 +834,12 @@ ipcMain.on('agent:cancel', () => {
   currentAgentAbort?.abort()
   for (const resolve of pendingApprovals.values()) resolve('deny')
   pendingApprovals.clear()
+  // Unblock any turn parked on a clarification or a pitcher proposal so the loop
+  // can observe the abort and stop instead of hanging on user input.
+  for (const resolve of pendingNapkinChoices.values()) resolve('')
+  pendingNapkinChoices.clear()
+  for (const resolve of pendingPitcherProposals.values()) resolve({ saved: false, name: '' })
+  pendingPitcherProposals.clear()
 })
 
 // --- Pitcher: scheduled tasks ------------------------------------------------
@@ -810,10 +850,11 @@ function emitPitcher(evt: PitcherEvent): void {
 
 // Run one Pitcher end-to-end. Auto-approves only tools on its allowlist; every
 // other tool call is denied so a scheduled task can't be steered (e.g. by
-// injected web content) into actions it was never granted. The pour is saved as
-// a normal conversation the user can reopen, and a desktop notification is
-// raised when the window isn't focused. Bounded retry guards against a flaky
-// local model that occasionally fails to call its tools.
+// injected web content) into actions it was never granted. Every pour , success
+// OR failure , is saved as a conversation the user can reopen, so a failed run
+// is inspectable (which tool was blocked, what error occurred) instead of
+// vanishing. A desktop notification is raised when the window isn't focused, and
+// a bounded retry guards against a flaky local model.
 async function pourPitcher(p: Pitcher): Promise<PitcherRunResult> {
   emitPitcher({ type: 'pitcher_started', id: p.id })
 
@@ -827,26 +868,68 @@ async function pourPitcher(p: Pitcher): Promise<PitcherRunResult> {
   const messages: ChatMessage[] = [{ role: 'user', content: prompt }]
   let napkin: Napkin | null = null
   let finalText = ''
+  // A headless pour surfaces most failures (step-limit with no answer, context
+  // overflow, a blocked tool the model kept retrying) as an 'error' EVENT rather
+  // than a thrown exception , the loop emits it then returns normally. Capture
+  // it so such a run is recorded as a failure instead of a silent "(no reply)".
+  let emittedError: string | null = null
+  // A live transcript of the pour so a saved run shows the tool calls, denials,
+  // and errors , not just the final text. Reset at the start of each attempt.
+  let entries: TranscriptEntry[] = []
 
   const emit = (e: AgentEvent): void => {
-    if (e.type === 'assistant_text') finalText = e.text
-    if (e.type === 'napkin_show') napkin = e.napkin
+    if (e.type === 'assistant_text') {
+      finalText = e.text
+      entries.push({ kind: 'assistant', text: e.text })
+    } else if (e.type === 'napkin_show') {
+      napkin = e.napkin
+      entries.push({ kind: 'napkin', napkin: e.napkin })
+    } else if (e.type === 'tool_call') {
+      entries.push({ kind: 'tool', label: `${e.server} → ${e.tool}`, detail: JSON.stringify(e.args) })
+    } else if (e.type === 'tool_result') {
+      entries.push({ kind: 'tool', label: `${e.server} ← ${e.tool}`, detail: e.preview, ok: e.ok })
+    } else if (e.type === 'error') {
+      emittedError = e.message
+      entries.push({ kind: 'error', text: e.message })
+    }
     // Mirror to the window if the user happens to be watching.
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('agent:event', e)
   }
 
   // Whitelist approve: allow iff the qualified tool is explicitly permitted.
-  const approve: ApproveFn = ({ qualified }) => Promise.resolve(p.allowedTools.includes(qualified))
+  // Denied calls still land in the saved transcript (as a blocked tool_result),
+  // so a run that failed because a needed tool wasn't enabled is diagnosable.
+  // The denial carries a Pitcher-specific reason so the model and transcript say
+  // *why* it was blocked (not in this task's allow-list) rather than the
+  // misleading "denied by user".
+  const approve: ApproveFn = ({ qualified, tool }) =>
+    Promise.resolve(
+      p.allowedTools.includes(qualified)
+        ? true
+        : {
+            allowed: false,
+            reason: `The "${tool}" tool is not in this scheduled task's allowed tools, so it was blocked. To let this task use it, edit the Pitcher and check the tool (it must first be connected in the Pantry).`
+          }
+    )
 
   let lastErr: unknown = null
   for (let attempt = 0; attempt < 2; attempt++) {
     napkin = null
     finalText = ''
+    emittedError = null
+    entries = []
     const abort = new AbortController()
     try {
       // No onLimit/askNapkin: a headless pour must not block on user input, so
       // the loop stops at its step budget and skips clarification instead.
       await agent.run(messages, emit, approve, abort.signal)
+      // An emitted error means the loop gave up without a real answer; treat it
+      // as a failed attempt so it retries and, if it persists, is recorded as an
+      // error rather than a success.
+      if (emittedError) {
+        lastErr = new Error(emittedError)
+        continue
+      }
       lastErr = null
       break
     } catch (err) {
@@ -858,30 +941,30 @@ async function pourPitcher(p: Pitcher): Promise<PitcherRunResult> {
   const list = readPitchers(appPath)
   const idx = list.findIndex((x) => x.id === p.id)
 
-  if (lastErr) {
-    const error = lastErr instanceof Error ? lastErr.message : String(lastErr)
-    if (idx >= 0) {
-      list[idx] = { ...list[idx], lastStatus: 'error', lastError: error }
-      writePitchers(appPath, list)
-    }
-    if (mainWindow && !mainWindow.isFocused() && Notification.isSupported())
-      new Notification({ title: `Pitcher failed: ${p.name}`, body: error }).show()
-    emitPitcher({ type: 'pitcher_finished', id: p.id, ok: false, error })
-    return { id: p.id, ok: false, error }
-  }
+  const failed = lastErr != null
+  const error = failed
+    ? lastErr instanceof Error
+      ? lastErr.message
+      : String(lastErr)
+    : undefined
 
-  // Persist the pour as a normal saved conversation the user can reopen later.
+  // Always persist the run as a saved conversation , success or failure , so the
+  // user can reopen it and see exactly what happened. Honor a napkin pour's
+  // output preference on success by synthesizing a Napkin when the model didn't.
   const sessionId = randomUUID()
-  const entries: TranscriptEntry[] = [{ kind: 'assistant', text: finalText || '(no reply)' }]
-  // Honor the Pitcher's output preference: a napkin pour must always serve a
-  // Napkin, so wrap the reply text when the model didn't emit one itself.
-  if (!napkin && p.output === 'napkin' && finalText.trim()) {
+  if (!failed && !napkin && p.output === 'napkin' && finalText.trim())
     napkin = { title: p.name, kind: 'markdown', content: finalText }
-  }
-  if (napkin) entries.push({ kind: 'napkin', napkin })
+  if (napkin && !entries.some((e) => e.kind === 'napkin')) entries.push({ kind: 'napkin', napkin })
+  if (entries.length === 0)
+    entries.push(
+      failed
+        ? { kind: 'error', text: error ?? 'The pour failed.' }
+        : { kind: 'assistant', text: finalText || '(no reply)' }
+    )
+
   writeSession(appPath, {
     id: sessionId,
-    title: `🥤 ${p.name}`,
+    title: `${failed ? '⚠️' : '🥤'} ${p.name}`,
     createdAt: now,
     updatedAt: now,
     messageCount: 2,
@@ -891,17 +974,30 @@ async function pourPitcher(p: Pitcher): Promise<PitcherRunResult> {
   })
 
   if (idx >= 0) {
-    list[idx] = { ...list[idx], lastRunAt: now, lastStatus: 'ok', lastError: undefined }
+    list[idx] = failed
+      ? { ...list[idx], lastStatus: 'error', lastError: error, lastSessionId: sessionId }
+      : {
+          ...list[idx],
+          lastRunAt: now,
+          lastStatus: 'ok',
+          lastError: undefined,
+          lastSessionId: sessionId
+        }
     writePitchers(appPath, list)
   }
-  if (mainWindow && !mainWindow.isFocused() && Notification.isSupported())
-    new Notification({
-      title: `Fresh pour: ${p.name}`,
-      body: finalText.slice(0, 120) || 'Ready in your history.'
-    }).show()
 
-  emitPitcher({ type: 'pitcher_finished', id: p.id, ok: true, sessionId })
-  return { id: p.id, ok: true, sessionId }
+  if (mainWindow && !mainWindow.isFocused() && Notification.isSupported())
+    new Notification(
+      failed
+        ? { title: `Pitcher failed: ${p.name}`, body: error ?? 'Open the run to see what happened.' }
+        : {
+            title: `Fresh pour: ${p.name}`,
+            body: finalText.slice(0, 120) || 'Ready in your history.'
+          }
+    ).show()
+
+  emitPitcher({ type: 'pitcher_finished', id: p.id, ok: !failed, sessionId, error })
+  return { id: p.id, ok: !failed, sessionId, error }
 }
 
 const scheduler = new PitcherScheduler(

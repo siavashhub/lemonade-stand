@@ -4,20 +4,32 @@ import type {
   ChatCompletionMessageToolCall,
   ChatCompletionTool
 } from 'openai/resources/chat/completions'
-import type { AgentEvent, ChatMessage, Napkin, NapkinChoice, PlanStep } from '@shared/types'
+import type {
+  AgentEvent,
+  ChatMessage,
+  Napkin,
+  NapkinChoice,
+  PitcherOutput,
+  PitcherTrigger,
+  PlanStep
+} from '@shared/types'
 import type { LemonadeClient } from '../lemonade/client'
 import type { McpManager } from '../mcp/manager'
 import { dirname } from 'path'
 
 // Asks the user to approve a single tool call. Resolves true to proceed, false
-// to skip. The main process implements this by prompting the renderer; a
-// non-interactive caller can pass a function that always resolves true.
+// to skip. May instead resolve an object carrying a human-readable `reason` for
+// a denial , used so a headless Pitcher pour can explain that a tool was blocked
+// because it isn't in the task's allow-list (not "denied by the user"). The main
+// process implements this by prompting the renderer; a non-interactive caller
+// can pass a function that always resolves true.
+export type ApproveResult = boolean | { allowed: boolean; reason?: string }
 export type ApproveFn = (params: {
   server: string
   tool: string
   qualified: string
   args: unknown
-}) => Promise<boolean>
+}) => Promise<ApproveResult>
 
 // Asked when the agent exhausts its step budget without a final answer.
 // Resolves true to grant another budget and keep going, false to stop. The main
@@ -35,6 +47,21 @@ export type AskNapkinFn = (params: {
   prompt: string
   choices: NapkinChoice[]
 }) => Promise<string>
+
+// Proposes a new scheduled task ("Pitcher") for the user to review and confirm in
+// a pre-filled editor. Resolves once they save it (saved:true) or cancel
+// (saved:false); the built-in `create_pitcher` tool feeds that outcome back to
+// the model. Deliberately only wired for INTERACTIVE turns , a headless pour is
+// never given this callback, so a scheduled task can't create or steer other
+// scheduled tasks. The draft carries NO tool whitelist: the user grants tools
+// themselves in the editor, so the agent can never auto-grant capabilities.
+export type ProposePitcherFn = (draft: {
+  name: string
+  prompt: string
+  trigger: PitcherTrigger
+  output: PitcherOutput
+  allowedTools: string[]
+}) => Promise<{ saved: boolean; name: string }>
 
 // Safety valve: if the model calls only `update_plan` this many turns in a row
 // without doing any real work, stop rather than spin forever on plan edits.
@@ -110,10 +137,20 @@ const PLAN_TOOL_DEF: ChatCompletionTool = {
 const SHOW_NAPKIN_TOOL = 'show_napkin'
 const ASK_NAPKIN_TOOL = 'ask_napkin'
 
+// Built-in tool that lets the model PROPOSE a scheduled task the user confirms.
+// Like the others it's synthesized (no MCP server) and handled in-process, and
+// it's only offered to interactive turns (see `run`).
+const CREATE_PITCHER_TOOL = 'create_pitcher'
+
 // Every tool handled in-process rather than dispatched to an MCP server. Used to
 // separate real (task-advancing) tool calls from the built-ins when deciding
 // whether to force a planning round-trip.
-const BUILTIN_TOOLS = new Set([PLAN_TOOL, SHOW_NAPKIN_TOOL, ASK_NAPKIN_TOOL])
+const BUILTIN_TOOLS = new Set([
+  PLAN_TOOL,
+  SHOW_NAPKIN_TOOL,
+  ASK_NAPKIN_TOOL,
+  CREATE_PITCHER_TOOL
+])
 
 // Schema for `show_napkin`: lets the model display a rich artifact in the side
 // panel to enrich a reply beyond plain text. Raw HTML / live browsing is
@@ -193,6 +230,75 @@ const ASK_NAPKIN_TOOL_DEF: ChatCompletionTool = {
         }
       },
       required: ['prompt', 'choices']
+    }
+  }
+}
+
+// Schema for `create_pitcher`: propose a scheduled task the user reviews and
+// confirms. It does NOT create anything directly , the call opens a pre-filled
+// editor (with the tools it needs pre-selected) where the user confirms the
+// trigger and tool whitelist, so the model can never silently schedule work or
+// grant itself tools , the human still confirms. Only offered to interactive
+// turns (never during a pour).
+const CREATE_PITCHER_TOOL_DEF: ChatCompletionTool = {
+  type: 'function',
+  function: {
+    name: CREATE_PITCHER_TOOL,
+    description:
+      'Propose a new scheduled task (a "Pitcher") that re-runs a saved prompt on a trigger. Use ' +
+      'this when the user asks to schedule, automate, or repeat a task (e.g. "every morning at ' +
+      '8", "each time the app opens"). This does NOT create the task directly: it opens a ' +
+      'pre-filled editor for the user to review and confirm, and THEY choose which tools (if any) ' +
+      'the task may run , you cannot grant tools yourself. The task runs unattended with no ' +
+      'conversation history, so write a clear, fully self-contained prompt.',
+    parameters: {
+      type: 'object',
+      properties: {
+        name: {
+          type: 'string',
+          description: 'Short title for the task, also used as the saved-conversation title.'
+        },
+        prompt: {
+          type: 'string',
+          description:
+            'The full, self-contained instruction the task runs each time. It has no chat ' +
+            'history, so include every piece of context it needs.'
+        },
+        trigger: {
+          type: 'object',
+          description: 'When the task runs.',
+          properties: {
+            type: {
+              type: 'string',
+              enum: ['daily', 'on-open'],
+              description:
+                "'daily' fires at a local time each day; 'on-open' runs once each app launch."
+            },
+            at: {
+              type: 'string',
+              description: "For type 'daily', the 24-hour local time as HH:MM, e.g. '08:00'."
+            }
+          },
+          required: ['type']
+        },
+        output: {
+          type: 'string',
+          enum: ['napkin', 'chat'],
+          description:
+            "Where results are served: 'chat' (saved conversation) or 'napkin' (rich artifact " +
+            "panel). Defaults to 'chat'."
+        },
+        allowedTools: {
+          type: 'array',
+          items: { type: 'string' },
+          description:
+            'The tools this task will need to run unattended, given as their EXACT names as they ' +
+            'appear in the tools available to you now (e.g. a filesystem or fetch tool). These are ' +
+            'pre-selected in the review editor so the user only has to confirm; names that do not ' +
+            'match a real tool are ignored, and the user can add or remove any before saving.'
+        }
+      },
+      required: ['name', 'prompt', 'trigger']
     }
   }
 }
@@ -378,7 +484,8 @@ export class Agent {
     approve: ApproveFn,
     signal?: AbortSignal,
     onLimit?: ContinueFn,
-    askNapkin?: AskNapkinFn
+    askNapkin?: AskNapkinFn,
+    proposePitcher?: ProposePitcherFn
   ): Promise<void> {
     const messages = history as ChatCompletionMessageParam[]
     // Expose the MCP tools plus the built-in planning + napkin tools for this turn.
@@ -388,6 +495,10 @@ export class Agent {
       SHOW_NAPKIN_TOOL_DEF,
       ASK_NAPKIN_TOOL_DEF
     ]
+    // Only an interactive turn (proposePitcher present) may propose scheduled
+    // tasks. A headless pour never gets the tool, so a scheduled task can't
+    // create or steer other scheduled tasks (no privilege escalation).
+    if (proposePitcher) tools.push(CREATE_PITCHER_TOOL_DEF)
 
     // Prime the model to actually call tools rather than describe them. Only
     // inject if the caller hasn't already supplied a system message.
@@ -539,7 +650,14 @@ export class Agent {
           } else {
             didRealWork = true
           }
-          const planned = await this.executeCall(call, messages, emit, approve, askNapkin)
+          const planned = await this.executeCall(
+            call,
+            messages,
+            emit,
+            approve,
+            askNapkin,
+            proposePitcher
+          )
           // Track the latest plan so a premature stop can be detected against it.
           if (planned) currentPlan = planned
         }
@@ -811,12 +929,95 @@ export class Agent {
     return { title, prompt, choices }
   }
 
+  /**
+   * Coerce the model's `create_pitcher` arguments into a clean, safe draft, or
+   * null when unusable (no prompt). Tolerant of a weak model's rough output:
+   * clamps the name, defaults the output to 'chat', and only accepts a daily
+   * trigger with a valid 24-hour HH:MM time (else falls back to on-open). The
+   * proposed tool whitelist is filtered to tools that actually exist right now
+   * (a hallucinated name is dropped) and merely PRE-SELECTS them in the review
+   * editor , the user still confirms/edits the list before it's saved, so the
+   * model can't grant a task tools the user didn't approve.
+   */
+  private normalizePitcherDraft(args: Record<string, unknown>): {
+    name: string
+    prompt: string
+    trigger: PitcherTrigger
+    output: PitcherOutput
+    allowedTools: string[]
+  } | null {
+    const prompt = typeof args.prompt === 'string' ? args.prompt.trim() : ''
+    if (!prompt) return null
+    const rawName = typeof args.name === 'string' ? args.name.trim() : ''
+    const name = (rawName || 'Scheduled task').slice(0, 80)
+    // Default to serving a saved conversation; only 'napkin' opts into the panel.
+    const output: PitcherOutput = args.output === 'napkin' ? 'napkin' : 'chat'
+
+    // Accept the trigger as a nested object ({type, at}) or a loose top-level
+    // `at` string; anything that can't be read as a time becomes on-open. The
+    // parser is deliberately forgiving of how a weak model writes a time , "8",
+    // "8am", "8:30 pm", "0800" all work , since it often skips the strict HH:MM.
+    const toDaily = (value: unknown): PitcherTrigger | null => {
+      if (typeof value !== 'string') return null
+      let s = value.trim().toLowerCase()
+      if (!s) return null
+      const ampm = /(am|pm)/.exec(s)?.[1]
+      s = s.replace(/\s*(am|pm)\s*/, '').trim()
+      let h: number
+      let min = 0
+      const m = s.match(/^(\d{1,2})(?::(\d{1,2}))?$/)
+      if (m) {
+        h = parseInt(m[1], 10)
+        min = m[2] != null ? parseInt(m[2], 10) : 0
+      } else if (/^\d{3,4}$/.test(s)) {
+        // Bare digits like "800" or "0800".
+        const digits = s.padStart(4, '0')
+        h = parseInt(digits.slice(0, 2), 10)
+        min = parseInt(digits.slice(2), 10)
+      } else {
+        return null
+      }
+      if (ampm === 'pm' && h < 12) h += 12
+      if (ampm === 'am' && h === 12) h = 0
+      if (h < 0 || h > 23 || min < 0 || min > 59) return null
+      return { type: 'daily', at: `${String(h).padStart(2, '0')}:${String(min).padStart(2, '0')}` }
+    }
+
+    let trigger: PitcherTrigger = { type: 'on-open' }
+    const t = args.trigger
+    if (t && typeof t === 'object') {
+      const rec = t as Record<string, unknown>
+      if (rec.type === 'daily') trigger = toDaily(rec.at) ?? { type: 'on-open' }
+      else if (rec.type === 'on-open') trigger = { type: 'on-open' }
+      else trigger = toDaily(rec.at) ?? { type: 'on-open' }
+    } else {
+      trigger = toDaily(args.at) ?? { type: 'on-open' }
+    }
+
+    // Pre-select the proposed tools, but keep only ones that really exist so a
+    // made-up name can't slip through; the user reviews the checked list before
+    // saving.
+    const available = new Set(this.mcp.getOpenAiTools().map((tool) => tool.function.name))
+    const rawTools = Array.isArray(args.allowedTools) ? args.allowedTools : []
+    const allowedTools = [
+      ...new Set(
+        rawTools
+          .filter((x): x is string => typeof x === 'string')
+          .map((x) => x.trim())
+          .filter((x) => available.has(x))
+      )
+    ]
+
+    return { name, prompt, trigger, output, allowedTools }
+  }
+
   private async executeCall(
     call: ChatCompletionMessageToolCall,
     messages: ChatCompletionMessageParam[],
     emit: (event: AgentEvent) => void,
     approve: ApproveFn,
-    askNapkin?: AskNapkinFn
+    askNapkin?: AskNapkinFn,
+    proposePitcher?: ProposePitcherFn
   ): Promise<PlanStep[] | undefined> {
     if (call.type !== 'function') return
     const qualified = call.function.name
@@ -893,18 +1094,61 @@ export class Agent {
       return
     }
 
+    // `create_pitcher`: propose a scheduled task the user reviews and confirms.
+    // Handled in-process; blocks on the user's decision. Absent the interactive
+    // callback (i.e. during a pour) the tool isn't even exposed, but guard
+    // anyway so a stray call is refused rather than silently creating a task.
+    if (qualified === CREATE_PITCHER_TOOL) {
+      const draft = this.normalizePitcherDraft(args)
+      if (!proposePitcher || !draft) {
+        messages.push({
+          role: 'tool',
+          tool_call_id: call.id,
+          content: !proposePitcher
+            ? 'Scheduling is not available here; tell the user to create the task from the ' +
+              'Pitchers panel instead.'
+            : 'Could not draft the task: provide a non-empty prompt and a valid trigger ' +
+              '(daily with an HH:MM time, or on-open).'
+        })
+        return
+      }
+      const result = await proposePitcher(draft)
+      messages.push({
+        role: 'tool',
+        tool_call_id: call.id,
+        content: result.saved
+          ? `The user reviewed and saved the scheduled task "${result.name}"; it will run on ` +
+            `its trigger. Briefly confirm this to the user.`
+          : 'The user cancelled the scheduled task, so nothing was created. Do not retry unless ' +
+            'they ask again.'
+      })
+      return
+    }
+
     const [serverId, ...rest] = qualified.split('__')
     const toolLabel = rest.join('__') || qualified
 
     // Gate on user approval BEFORE announcing/executing the call. A denied tool
-    // gets a synthetic result so the model can react rather than hang.
-    const allowed = await approve({ server: serverId, tool: toolLabel, qualified, args })
+    // gets a synthetic result so the model can react rather than hang. A denial
+    // may carry a reason (e.g. a pour blocking a tool not in its allow-list) so
+    // the transcript and the model see *why*, not a generic "denied by user".
+    const decision = await approve({ server: serverId, tool: toolLabel, qualified, args })
+    const allowed = typeof decision === 'boolean' ? decision : decision.allowed
+    const denyReason = typeof decision === 'boolean' ? undefined : decision.reason
     if (!allowed) {
-      emit({ type: 'tool_result', server: serverId, tool: toolLabel, ok: false, preview: 'Denied by user' })
+      emit({
+        type: 'tool_result',
+        server: serverId,
+        tool: toolLabel,
+        ok: false,
+        preview: denyReason ?? 'Denied by user'
+      })
       messages.push({
         role: 'tool',
         tool_call_id: call.id,
-        content: 'The user denied permission to run this tool. Do not retry it; continue without it.'
+        content: denyReason
+          ? `${denyReason} Do not retry it; continue without it and tell the user how to enable it if they need it.`
+          : 'The user denied permission to run this tool. Do not retry it; continue without it.'
       })
       return
     }

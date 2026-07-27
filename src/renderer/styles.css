@@ -2839,6 +2839,12 @@ button.server-status:hover {
   opacity: 0.8;
 }
 
+/* Red "last run failed" indicator in the Pitchers panel meta line. */
+.pitcher-failed {
+  color: var(--danger, #d9534f);
+  font-weight: 600;
+}
+
 .pitcher-search {
   box-sizing: border-box;
   background: var(--bg);
