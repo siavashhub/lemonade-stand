@@ -9,6 +9,7 @@
       "recommended": true,
       "transport": "http",
       "url": "http://localhost:13305/mcp",
+      "note": "URL is a fallback only: the app automatically points this gateway at whatever host your chat connection (LEMONADE_BASE_URL / the in-app server menu) uses, so it works even when your Lemonade server runs on another machine.",
       "homepage": "https://github.com/lemonade-sdk/lemonade"
     },
     {

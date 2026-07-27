@@ -6,7 +6,7 @@
       "transport": "http",
       "url": "http://localhost:13305/mcp",
       "enabled": true,
-      "note": "Your running lemond's own MCP gateway. Enabling this exposes lemonade_chat / lemonade_omni / lemonade_generate_image / lemonade_transcribe_audio / lemonade_list_models as tools to the agent. If lemond runs with LEMONADE_API_KEY, add an Authorization header in code/config."
+      "note": "Your running lemond's own MCP gateway. The app automatically points this at whatever host your chat connection (LEMONADE_BASE_URL / the in-app server menu) targets, so this URL is just a fallback and cross-machine setups work without editing it. Enabling this exposes lemonade_chat / lemonade_omni / lemonade_generate_image / lemonade_transcribe_audio / lemonade_list_models as tools to the agent. If lemond runs with LEMONADE_API_KEY, the app forwards it automatically."
     }
   ]
 }
