@@ -67,6 +67,10 @@ const api: RendererApi = {
     ipcRenderer.send('agent:napkin-choice', id, choiceId)
   },
 
+  respondPitcherProposal(id: string, result: { saved: boolean; name: string }): void {
+    ipcRenderer.send('agent:pitcher-proposal-result', id, result)
+  },
+
   setSpeak(enabled: boolean): Promise<boolean> {
     return ipcRenderer.invoke('agent:set-speak', enabled)
   },
@@ -209,6 +213,10 @@ const api: RendererApi = {
 
   runPitcher(id: string) {
     return ipcRenderer.invoke('pitcher:run', id)
+  },
+
+  cancelPitcher(id: string) {
+    return ipcRenderer.invoke('pitcher:cancel', id)
   },
 
   onPitcherEvent(handler: (event: PitcherEvent) => void): () => void {

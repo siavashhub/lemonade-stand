@@ -141,7 +141,13 @@ const DEFAULT_SYSTEM_PROMPT =
   'To show an image, a diagram, or other rich/copyable artifact, call the show_napkin tool so it ' +
   'renders in the side panel. Never paste base64 data or a data: URL into your chat reply , the ' +
   'chat cannot render it. When a tool returns an image, it is already shown to the user on the ' +
-  'napkin panel; just acknowledge it briefly instead of trying to reproduce the bytes.'
+  'napkin panel; just acknowledge it briefly instead of trying to reproduce the bytes. ' +
+  'When the user asks to schedule, automate, or repeat a task (e.g. "every morning", "each time ' +
+  'the app opens"), call the create_pitcher tool to propose it, listing the exact tools it will ' +
+  'need in allowedTools; the user reviews the pre-filled editor and confirms it before anything ' +
+  'is scheduled. If the task , scheduled or not , needs a capability you have no connected tool ' +
+  'for (e.g. fetching a web page but no fetch tool is available), tell the user to enable that ' +
+  "tool's server in the Pantry first instead of proceeding with a task that can't run."
 
 const SERVERS_FILE = 'config/servers.json'
 // Optional, gitignored per-developer override merged over SERVERS_FILE. Keeps

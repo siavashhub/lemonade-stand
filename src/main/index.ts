@@ -32,7 +32,7 @@ import {
 } from './config'
 import { LemonadeClient } from './lemonade/client'
 import { McpManager } from './mcp/manager'
-import { Agent, type ApproveFn, type AskNapkinFn, type ContinueFn } from './agent/loop'
+import { Agent, type ApproveFn, type AskNapkinFn, type ContinueFn, type ProposePitcherFn } from './agent/loop'
 import { PitcherScheduler } from './pitcher/scheduler'
 import { initFileLogging } from './logger'
 import {
@@ -151,6 +151,14 @@ const pendingLimits = new Map<string, (cont: boolean) => void>()
 // picks an option in the Napkin panel; the reply arrives on the
 // 'agent:napkin-choice' channel.
 const pendingNapkinChoices = new Map<string, (choiceId: string) => void>()
+
+// In-flight create_pitcher proposals: id -> resolver. The agent loop awaits
+// these while the user reviews a pre-filled Pitcher editor; the renderer
+// resolves via the 'agent:pitcher-proposal-result' channel.
+const pendingPitcherProposals = new Map<
+  string,
+  (result: { saved: boolean; name: string }) => void
+>()
 
 // Abort handles for work the user can halt mid-flight. The renderer's stop
 // button signals these via the 'agent:cancel' / 'agent:cancel-transcribe'
@@ -665,6 +673,19 @@ ipcMain.on('agent:napkin-choice', (_event, id: string, choiceId: string) => {
   }
 })
 
+// Renderer's answer to a pitcher_proposal_request: whether the user saved the
+// pre-filled scheduled task. Resolving the stored promise unblocks the loop.
+ipcMain.on(
+  'agent:pitcher-proposal-result',
+  (_event, id: string, result: { saved: boolean; name: string }) => {
+    const resolve = pendingPitcherProposals.get(id)
+    if (resolve) {
+      pendingPitcherProposals.delete(id)
+      resolve(result)
+    }
+  }
+)
+
 // Compact one-line description of an agent event for the debug log, so a full
 // turn (model completions, tool calls, plan updates, budget) can be read back
 // from the log file when diagnosing a run.
@@ -683,6 +704,8 @@ function describeEvent(e: AgentEvent): string {
       return `napkin_show kind=${e.napkin.kind} title=${e.napkin.title} len=${e.napkin.content.length}`
     case 'napkin_choice_request':
       return `napkin_choice_request choices=${e.choices.length} prompt=${e.prompt.slice(0, 80)}`
+    case 'pitcher_proposal_request':
+      return `pitcher_proposal_request name=${e.draft.name} trigger=${e.draft.trigger.type}`
     case 'assistant_text':
       return `assistant_text len=${e.text.trim().length}`
     case 'reasoning':
@@ -782,10 +805,21 @@ ipcMain.handle('agent:send', async (event, messages: ChatMessage[]) => {
     })
   }
 
+  // Propose-pitcher callback: open a pre-filled Pitcher editor in the renderer
+  // and await the user's decision. Only ever passed to this interactive turn ,
+  // pours never get it , so a scheduled task can't create more scheduled tasks.
+  const proposePitcher: ProposePitcherFn = (draft) => {
+    const id = randomUUID()
+    send({ type: 'pitcher_proposal_request', id, draft })
+    return new Promise<{ saved: boolean; name: string }>((resolve) => {
+      pendingPitcherProposals.set(id, resolve)
+    })
+  }
+
   const abort = new AbortController()
   currentAgentAbort = abort
   try {
-    await agent.run(messages, emit, approve, abort.signal, onLimit, askNapkin)
+    await agent.run(messages, emit, approve, abort.signal, onLimit, askNapkin, proposePitcher)
   } finally {
     if (currentAgentAbort === abort) currentAgentAbort = null
   }
@@ -800,6 +834,12 @@ ipcMain.on('agent:cancel', () => {
   currentAgentAbort?.abort()
   for (const resolve of pendingApprovals.values()) resolve('deny')
   pendingApprovals.clear()
+  // Unblock any turn parked on a clarification or a pitcher proposal so the loop
+  // can observe the abort and stop instead of hanging on user input.
+  for (const resolve of pendingNapkinChoices.values()) resolve('')
+  pendingNapkinChoices.clear()
+  for (const resolve of pendingPitcherProposals.values()) resolve({ saved: false, name: '' })
+  pendingPitcherProposals.clear()
 })
 
 // --- Pitcher: scheduled tasks ------------------------------------------------
@@ -808,13 +848,32 @@ function emitPitcher(evt: PitcherEvent): void {
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('pitcher:event', evt)
 }
 
+// In-flight pours keyed by Pitcher id so the renderer's Stop button can abort a
+// running background pour. Populated for the duration of each pour attempt and
+// cleared as soon as it settles.
+const runningPours = new Map<string, AbortController>()
+// Ids the user explicitly stopped, so the pour records a neutral "stopped"
+// outcome and skips its retry instead of treating the abort as a real failure.
+const cancelledPours = new Set<string>()
+
+// Hard ceiling on how long a single headless pour may run. A scheduled task has
+// no user watching to hit Stop, so without this a hung tool call (e.g. a fetch
+// that never returns) would leave the pour executing forever , no conversation,
+// no status, just "still running" in the logs. On timeout the pour is aborted
+// and recorded as a failure so it always persists something inspectable.
+const POUR_TIMEOUT_MS = 5 * 60_000
+
 // Run one Pitcher end-to-end. Auto-approves only tools on its allowlist; every
 // other tool call is denied so a scheduled task can't be steered (e.g. by
-// injected web content) into actions it was never granted. The pour is saved as
-// a normal conversation the user can reopen, and a desktop notification is
-// raised when the window isn't focused. Bounded retry guards against a flaky
-// local model that occasionally fails to call its tools.
+// injected web content) into actions it was never granted. Every pour , success
+// OR failure , is saved as a conversation the user can reopen, so a failed run
+// is inspectable (which tool was blocked, what error occurred) instead of
+// vanishing. A desktop notification is raised when the window isn't focused, and
+// a bounded retry guards against a flaky local model.
 async function pourPitcher(p: Pitcher): Promise<PitcherRunResult> {
+  // Clear any stale cancel flag from a prior pour of this Pitcher so a Stop that
+  // landed just as the last run finished can't wrongly mark this fresh run.
+  cancelledPours.delete(p.id)
   emitPitcher({ type: 'pitcher_started', id: p.id })
 
   // A napkin pour steers the model to present its answer as a rich artifact via
@@ -827,81 +886,221 @@ async function pourPitcher(p: Pitcher): Promise<PitcherRunResult> {
   const messages: ChatMessage[] = [{ role: 'user', content: prompt }]
   let napkin: Napkin | null = null
   let finalText = ''
+  // A headless pour surfaces most failures (step-limit with no answer, context
+  // overflow, a blocked tool the model kept retrying) as an 'error' EVENT rather
+  // than a thrown exception , the loop emits it then returns normally. Capture
+  // it so such a run is recorded as a failure instead of a silent "(no reply)".
+  let emittedError: string | null = null
+  // A live transcript of the pour so a saved run shows the tool calls, denials,
+  // and errors , not just the final text. Reset at the start of each attempt.
+  let entries: TranscriptEntry[] = []
 
   const emit = (e: AgentEvent): void => {
-    if (e.type === 'assistant_text') finalText = e.text
-    if (e.type === 'napkin_show') napkin = e.napkin
+    if (e.type === 'assistant_text') {
+      finalText = e.text
+      entries.push({ kind: 'assistant', text: e.text })
+    } else if (e.type === 'napkin_show') {
+      napkin = e.napkin
+      entries.push({ kind: 'napkin', napkin: e.napkin })
+    } else if (e.type === 'tool_call') {
+      entries.push({ kind: 'tool', label: `${e.server} → ${e.tool}`, detail: JSON.stringify(e.args) })
+    } else if (e.type === 'tool_result') {
+      entries.push({ kind: 'tool', label: `${e.server} ← ${e.tool}`, detail: e.preview, ok: e.ok })
+    } else if (e.type === 'error') {
+      emittedError = e.message
+      entries.push({ kind: 'error', text: e.message })
+    }
     // Mirror to the window if the user happens to be watching.
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('agent:event', e)
   }
 
   // Whitelist approve: allow iff the qualified tool is explicitly permitted.
-  const approve: ApproveFn = ({ qualified }) => Promise.resolve(p.allowedTools.includes(qualified))
+  // Denied calls still land in the saved transcript (as a blocked tool_result),
+  // so a run that failed because a needed tool wasn't enabled is diagnosable.
+  // The denial carries a Pitcher-specific reason so the model and transcript say
+  // *why* it was blocked (not in this task's allow-list) rather than the
+  // misleading "denied by user". Blocked tools are recorded so the whole run can
+  // be flagged as a failure below (a task that couldn't use a tool it needed did
+  // not really succeed, even if the model then replied "sorry, I can't").
+  const blockedTools = new Set<string>()
+  const approve: ApproveFn = ({ qualified, tool }) => {
+    if (p.allowedTools.includes(qualified)) return Promise.resolve(true)
+    blockedTools.add(tool)
+    return Promise.resolve({
+      allowed: false,
+      reason: `The "${tool}" tool is not in this scheduled task's allowed tools, so it was blocked. To let this task use it, edit the Pitcher and check the tool (it must first be connected in the Pantry).`
+    })
+  }
 
   let lastErr: unknown = null
   for (let attempt = 0; attempt < 2; attempt++) {
     napkin = null
     finalText = ''
+    emittedError = null
+    entries = []
     const abort = new AbortController()
+    // Expose this attempt's controller so the renderer's Stop button can abort
+    // a running pour; cleared in the finally below once the attempt settles.
+    runningPours.set(p.id, abort)
+    let timedOut = false
+    // Bound the pour: race the run against a deadline so a hung tool call can't
+    // leave it executing forever with nothing ever saved. On timeout we abort
+    // and reject, so the pour drops into the failure path and still persists.
+    let timer: NodeJS.Timeout | undefined
+    const deadline = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => {
+        timedOut = true
+        abort.abort()
+        reject(
+          new Error(
+            `Pour timed out after ${Math.round(POUR_TIMEOUT_MS / 60000)} minutes , a tool call may have hung.`
+          )
+        )
+      }, POUR_TIMEOUT_MS)
+    })
     try {
       // No onLimit/askNapkin: a headless pour must not block on user input, so
       // the loop stops at its step budget and skips clarification instead.
-      await agent.run(messages, emit, approve, abort.signal)
+      await Promise.race([agent.run(messages, emit, approve, abort.signal), deadline])
+      // An emitted error means the loop gave up without a real answer; treat it
+      // as a failed attempt so it retries and, if it persists, is recorded as an
+      // error rather than a success.
+      if (emittedError) {
+        lastErr = new Error(emittedError)
+        continue
+      }
       lastErr = null
       break
     } catch (err) {
       lastErr = err
+      // A timeout won't fix itself on retry (the tool call is still hung), so
+      // stop rather than burning another full timeout window.
+      if (timedOut) break
+      // The user hit Stop; don't retry, drop into the "stopped" path below.
+      if (cancelledPours.has(p.id)) break
+    } finally {
+      if (timer) clearTimeout(timer)
+      if (runningPours.get(p.id) === abort) runningPours.delete(p.id)
     }
   }
 
   const now = Date.now()
-  const list = readPitchers(appPath)
+  // Read defensively: a concurrent pour (e.g. a scheduled one racing this manual
+  // run) may have the file mid-write, and a read/parse hiccup here must never
+  // skip the pitcher_finished event below , that would strand the renderer's
+  // Stop indicator on a run that has actually ended.
+  let list: Pitcher[] = []
+  try {
+    list = readPitchers(appPath)
+  } catch (err) {
+    console.error(`[pitcher] failed to read pitchers while finalizing "${p.name}":`, err)
+  }
   const idx = list.findIndex((x) => x.id === p.id)
 
-  if (lastErr) {
-    const error = lastErr instanceof Error ? lastErr.message : String(lastErr)
-    if (idx >= 0) {
-      list[idx] = { ...list[idx], lastStatus: 'error', lastError: error }
-      writePitchers(appPath, list)
-    }
-    if (mainWindow && !mainWindow.isFocused() && Notification.isSupported())
-      new Notification({ title: `Pitcher failed: ${p.name}`, body: error }).show()
-    emitPitcher({ type: 'pitcher_finished', id: p.id, ok: false, error })
-    return { id: p.id, ok: false, error }
+  // A user-initiated Stop is not a failure: record it as a neutral "stopped"
+  // outcome so the panel shows a calm indicator (no red ⚠, no failure toast).
+  const stopped = cancelledPours.delete(p.id)
+
+  let failed = !stopped && lastErr != null
+  let error = stopped
+    ? 'You stopped this pour before it finished.'
+    : failed
+      ? lastErr instanceof Error
+        ? lastErr.message
+        : String(lastErr)
+      : undefined
+
+  // A pour that was blocked from a tool it tried to use didn't really do its job,
+  // even if the model then produced a "sorry, I can't" reply. Flag it as a
+  // failure so the Pitchers panel shows the red indicator and the user knows to
+  // grant the tool, instead of a misleading "ok".
+  if (!failed && !stopped && blockedTools.size > 0) {
+    failed = true
+    const names = [...blockedTools].map((t) => `"${t}"`).join(', ')
+    const plural = blockedTools.size > 1
+    error = `This task tried to use ${names} but ${plural ? 'those tools are' : 'that tool is'} not in its allowed tools. Edit the Pitcher to allow ${plural ? 'them' : 'it'} (and make sure the tool's server is connected in the Pantry).`
   }
 
-  // Persist the pour as a normal saved conversation the user can reopen later.
+  // Always persist the run as a saved conversation , success or failure , so the
+  // user can reopen it and see exactly what happened. Honor a napkin pour's
+  // output preference on success by synthesizing a Napkin when the model didn't.
   const sessionId = randomUUID()
-  const entries: TranscriptEntry[] = [{ kind: 'assistant', text: finalText || '(no reply)' }]
-  // Honor the Pitcher's output preference: a napkin pour must always serve a
-  // Napkin, so wrap the reply text when the model didn't emit one itself.
-  if (!napkin && p.output === 'napkin' && finalText.trim()) {
+  if (!failed && !stopped && !napkin && p.output === 'napkin' && finalText.trim())
     napkin = { title: p.name, kind: 'markdown', content: finalText }
+  if (napkin && !entries.some((e) => e.kind === 'napkin')) entries.push({ kind: 'napkin', napkin })
+  if (entries.length === 0)
+    entries.push(
+      stopped
+        ? { kind: 'assistant', text: finalText || 'You stopped this pour before it finished.' }
+        : failed
+          ? { kind: 'error', text: error ?? 'The pour failed.' }
+          : { kind: 'assistant', text: finalText || '(no reply)' }
+    )
+
+  // Persist defensively , a failed write must not skip the finished event.
+  try {
+    writeSession(appPath, {
+      id: sessionId,
+      title: `${stopped ? '⏹️' : failed ? '⚠️' : '🥤'} ${p.name}`,
+      createdAt: now,
+      updatedAt: now,
+      messageCount: 2,
+      model: config.model,
+      history: [...messages, { role: 'assistant', content: finalText }],
+      entries
+    })
+  } catch (err) {
+    console.error(`[pitcher] failed to save pour session for "${p.name}":`, err)
   }
-  if (napkin) entries.push({ kind: 'napkin', napkin })
-  writeSession(appPath, {
-    id: sessionId,
-    title: `🥤 ${p.name}`,
-    createdAt: now,
-    updatedAt: now,
-    messageCount: 2,
-    model: config.model,
-    history: [...messages, { role: 'assistant', content: finalText }],
-    entries
-  })
 
   if (idx >= 0) {
-    list[idx] = { ...list[idx], lastRunAt: now, lastStatus: 'ok', lastError: undefined }
-    writePitchers(appPath, list)
+    list[idx] = stopped
+      ? {
+          ...list[idx],
+          lastStoppedAt: now,
+          lastStatus: 'stopped',
+          lastError: undefined,
+          lastSessionId: sessionId
+        }
+      : failed
+        ? { ...list[idx], lastStatus: 'error', lastError: error, lastSessionId: sessionId }
+        : {
+            ...list[idx],
+            lastRunAt: now,
+            lastStatus: 'ok',
+            lastError: undefined,
+            lastSessionId: sessionId
+          }
+    try {
+      writePitchers(appPath, list)
+    } catch (err) {
+      console.error(`[pitcher] failed to persist status for "${p.name}":`, err)
+    }
   }
-  if (mainWindow && !mainWindow.isFocused() && Notification.isSupported())
-    new Notification({
-      title: `Fresh pour: ${p.name}`,
-      body: finalText.slice(0, 120) || 'Ready in your history.'
-    }).show()
 
-  emitPitcher({ type: 'pitcher_finished', id: p.id, ok: true, sessionId })
-  return { id: p.id, ok: true, sessionId }
+  // No desktop notification for a user-initiated Stop , they're right here and
+  // already know they stopped it. Guarded so a notification failure can't skip
+  // the finished event below.
+  if (!stopped && mainWindow && !mainWindow.isFocused() && Notification.isSupported()) {
+    try {
+      new Notification(
+        failed
+          ? {
+              title: `Pitcher failed: ${p.name}`,
+              body: error ?? 'Open the run to see what happened.'
+            }
+          : {
+              title: `Fresh pour: ${p.name}`,
+              body: finalText.slice(0, 120) || 'Ready in your history.'
+            }
+      ).show()
+    } catch (err) {
+      console.error(`[pitcher] failed to raise notification for "${p.name}":`, err)
+    }
+  }
+
+  emitPitcher({ type: 'pitcher_finished', id: p.id, ok: !failed, sessionId, error, stopped })
+  return { id: p.id, ok: !failed, sessionId, error, stopped }
 }
 
 const scheduler = new PitcherScheduler(
@@ -934,6 +1133,14 @@ ipcMain.handle('pitcher:run', (_event, id: string): Promise<PitcherRunResult> =>
   const p = readPitchers(appPath).find((x) => x.id === id)
   if (!p) return Promise.resolve({ id, ok: false, error: 'Pitcher not found' })
   return pourPitcher(p)
+})
+
+// Renderer's Stop button on the "pouring…" bar: halt an in-flight pour. Mark it
+// cancelled so the pour skips its retry and records a neutral "stopped" outcome,
+// then abort the current attempt's signal so the agent loop unwinds.
+ipcMain.handle('pitcher:cancel', (_event, id: string) => {
+  cancelledPours.add(id)
+  runningPours.get(id)?.abort()
 })
 
 // --- Lifecycle ---------------------------------------------------------------

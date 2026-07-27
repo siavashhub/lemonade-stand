@@ -347,8 +347,15 @@ export interface Pitcher {
   allowedTools: string[]
   /** Epoch ms of the last successful pour, for daily catch-up on launch. */
   lastRunAt?: number
-  lastStatus?: 'ok' | 'error'
+  /** Epoch ms of the last user-initiated Stop. Like `lastRunAt`, it marks a
+   * daily fire as "handled" so a pour you deliberately stopped isn't caught up
+   * and re-run on the next launch. */
+  lastStoppedAt?: number
+  lastStatus?: 'ok' | 'error' | 'stopped'
   lastError?: string
+  /** Saved conversation id of the most recent pour (success OR failure), so the
+   * user can open it from the Pitchers panel to see exactly what happened. */
+  lastSessionId?: string
 }
 
 /** Result of a single pour, returned to the renderer's "Pour now" button. */
@@ -358,12 +365,35 @@ export interface PitcherRunResult {
   /** Saved conversation id, when the pour produced one. */
   sessionId?: string
   error?: string
+  /** True when the user hit Stop before the pour finished (not a failure). */
+  stopped?: boolean
 }
 
 /** Pushed to the renderer as a Pitcher's run state changes. */
 export type PitcherEvent =
   | { type: 'pitcher_started'; id: string }
-  | { type: 'pitcher_finished'; id: string; ok: boolean; sessionId?: string; error?: string }
+  | {
+      type: 'pitcher_finished'
+      id: string
+      ok: boolean
+      sessionId?: string
+      error?: string
+      stopped?: boolean
+    }
+
+/** A model-proposed scheduled task awaiting the user's review in a pre-filled
+ * editor. The proposed `allowedTools` are pre-selected for convenience but the
+ * user still confirms (and can edit) them before it is saved, so the agent can
+ * never silently grant capabilities to an unattended task. */
+export interface PitcherProposal {
+  name: string
+  prompt: string
+  trigger: PitcherTrigger
+  output: PitcherOutput
+  /** Qualified tool names the agent suggests the task needs, pre-checked in the
+   * review editor. Only tools that currently exist are included. */
+  allowedTools: string[]
+}
 
 /** Streamed events the main process pushes to the renderer during a turn. */
 export type AgentEvent =
@@ -387,6 +417,11 @@ export type AgentEvent =
   // built-in `ask_napkin` tool). Main is blocked awaiting the user's selection;
   // the renderer must call respondNapkinChoice(id, choiceId) to unblock it.
   | { type: 'napkin_choice_request'; id: string; title: string; prompt: string; choices: NapkinChoice[] }
+  // The agent proposed a new scheduled task via the built-in `create_pitcher`
+  // tool. Main is blocked awaiting review; the renderer opens a pre-filled
+  // Pitcher editor and must call respondPitcherProposal(id, ...) to unblock it.
+  // Never emitted during a pour, so a scheduled task can't schedule more tasks.
+  | { type: 'pitcher_proposal_request'; id: string; draft: PitcherProposal }
   // Live per-category context usage for the in-flight turn, so the usage badge
   // reflects the real prompt size (including tool calls/results) while the agent
   // works , not just the committed chat history.
@@ -449,6 +484,9 @@ export interface RendererApi {
   respondStepLimit(id: string, cont: boolean): void
   /** Answer a pending `napkin_choice_request` with the chosen option id. */
   respondNapkinChoice(id: string, choiceId: string): void
+  /** Answer a pending `pitcher_proposal_request`: report whether the user saved
+   * the pre-filled scheduled task, unblocking the agent loop. */
+  respondPitcherProposal(id: string, result: { saved: boolean; name: string }): void
   /** Toggle spoken replies (TTS). Returns the effective state. */
   setSpeak(enabled: boolean): Promise<boolean>
   /** Current spoken-reply state, seeded from config at startup. */
@@ -540,6 +578,8 @@ export interface RendererApi {
   deletePitcher(id: string): Promise<Pitcher[]>
   /** Pour a Pitcher immediately ("Pour now"). */
   runPitcher(id: string): Promise<PitcherRunResult>
+  /** Stop an in-flight pour (scheduled or manual) started for this Pitcher. */
+  cancelPitcher(id: string): Promise<void>
   /** Subscribe to Pitcher run-state events. Returns an unsubscribe function. */
   onPitcherEvent(handler: (event: PitcherEvent) => void): () => void
   /** Minimize the window. */

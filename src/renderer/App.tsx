@@ -18,6 +18,7 @@ import type {
   NapkinKind,
   Pitcher,
   PitcherEvent,
+  PitcherProposal,
   PlanStep,
   SessionSummary,
   TranscriptEntry
@@ -340,6 +341,13 @@ export function App(): JSX.Element {
     prompt: string
     choices: NapkinChoice[]
   } | null>(null)
+  // A model-proposed scheduled task awaiting the user's review in a pre-filled
+  // editor. The agent loop is blocked until the user saves or cancels; null when
+  // there's no open proposal.
+  const [pitcherProposal, setPitcherProposal] = useState<{
+    id: string
+    draft: PitcherProposal
+  } | null>(null)
   // User-initiated napkin creation form; shown when the side button is clicked.
   const [showNapkinCreator, setShowNapkinCreator] = useState(false)
   const [serverStatus, setServerStatus] = useState<ServerStatus>('checking')
@@ -358,6 +366,34 @@ export function App(): JSX.Element {
   const [activePanel, setActivePanel] = useState<Panel | null>(null)
   const togglePanel = (p: Panel): void => setActivePanel((cur) => (cur === p ? null : p))
   const closePanel = (): void => setActivePanel(null)
+  // The footer popovers (context, replycap, usage, connection, loaded) are
+  // small anchored dropdowns with no backdrop of their own , unlike the
+  // full-screen panels (Pantry, History, Models, …) which already close on a
+  // backdrop click. Each wrapper below is ref'd so a pointerdown anywhere
+  // outside the open popover's own wrapper closes it, matching how the other
+  // panels behave instead of requiring the explicit × button.
+  const contextPanelRef = useRef<HTMLDivElement>(null)
+  const replyCapPanelRef = useRef<HTMLDivElement>(null)
+  const usagePanelRef = useRef<HTMLDivElement>(null)
+  const connectionPanelRef = useRef<HTMLDivElement>(null)
+  const modelsControlPanelRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const refByPanel: Partial<Record<Panel, React.RefObject<HTMLDivElement | null>>> = {
+      context: contextPanelRef,
+      replycap: replyCapPanelRef,
+      usage: usagePanelRef,
+      connection: connectionPanelRef,
+      loaded: modelsControlPanelRef
+    }
+    const ref = activePanel ? refByPanel[activePanel] : undefined
+    if (!ref) return
+    function handlePointerDown(e: PointerEvent): void {
+      if (ref?.current && !ref.current.contains(e.target as Node)) closePanel()
+    }
+    document.addEventListener('pointerdown', handlePointerDown)
+    return () => document.removeEventListener('pointerdown', handlePointerDown)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activePanel])
   // Model download/loading state lifted to the app shell so the Models button in
   // the status bar can double as a progress indicator even when the Models panel
   // is closed. `downloads` mirrors the server's active jobs; `modelBusyId` is set
@@ -380,6 +416,10 @@ export function App(): JSX.Element {
   // auto-generated title once the first exchange has happened.
   const [sessions, setSessions] = useState<SessionSummary[]>([])
   const [pitchers, setPitchers] = useState<Pitcher[]>([])
+  // Ids of Pitchers currently pouring in the background, driven by
+  // pitcher_started / pitcher_finished events. Backs the sticky "pouring…" bar
+  // shown above the composer, each row with its own Stop button.
+  const [runningPitchers, setRunningPitchers] = useState<string[]>([])
   const [sessionId, setSessionId] = useState<string>(() => crypto.randomUUID())
   const [currentTitle, setCurrentTitle] = useState('')
   const createdAtRef = useRef<number>(Date.now())
@@ -609,6 +649,7 @@ export function App(): JSX.Element {
     setPlanExpanded(false)
     setNapkin(null)
     setNapkinChoice(null)
+    cancelProposedPitcher()
     // Move focus to the composer so the user can immediately start typing
     // instead of leaving focus on the button (which would swallow keystrokes).
     requestAnimationFrame(() => inputRef.current?.focus())
@@ -637,6 +678,7 @@ export function App(): JSX.Element {
         setPlanExpanded(false)
         setNapkin(null)
         setNapkinChoice(null)
+        cancelProposedPitcher()
         closePanel()
       })
       .catch(() => {})
@@ -691,11 +733,18 @@ export function App(): JSX.Element {
   }, [])
 
   // Keep the Pitchers list fresh as scheduled/manual pours change their status,
-  // and refresh the history list when a pour saves a new conversation.
+  // and refresh the history list when a pour saves a new conversation. Every
+  // pour , success OR failure , now saves a conversation, so refresh on any
+  // finish so a failed run's transcript shows up in History too.
   useEffect(() => {
     return window.api.onPitcherEvent((evt: PitcherEvent) => {
       refreshPitchers()
-      if (evt.type === 'pitcher_finished' && evt.ok) refreshSessions()
+      if (evt.type === 'pitcher_started') {
+        setRunningPitchers((ids) => (ids.includes(evt.id) ? ids : [...ids, evt.id]))
+      } else if (evt.type === 'pitcher_finished') {
+        setRunningPitchers((ids) => ids.filter((x) => x !== evt.id))
+        refreshSessions()
+      }
     })
   }, [])
 
@@ -969,6 +1018,29 @@ export function App(): JSX.Element {
     setNapkinChoice(null)
   }
 
+  // Answer a pending create_pitcher proposal. Saving persists the reviewed task
+  // (with whatever tool whitelist the user granted) and reports success back to
+  // the blocked agent loop; cancelling reports a decline. Either way the loop
+  // resumes.
+  async function saveProposedPitcher(p: Pitcher): Promise<void> {
+    if (!pitcherProposal) return
+    const { id } = pitcherProposal
+    try {
+      setPitchers(await window.api.savePitcher(p))
+    } finally {
+      window.api.respondPitcherProposal(id, { saved: true, name: p.name })
+      setPitcherProposal(null)
+    }
+  }
+  function cancelProposedPitcher(): void {
+    if (!pitcherProposal) return
+    window.api.respondPitcherProposal(pitcherProposal.id, {
+      saved: false,
+      name: pitcherProposal.draft.name
+    })
+    setPitcherProposal(null)
+  }
+
   async function toggleSpeak(): Promise<void> {
     const next = await window.api.setSpeak(!speak)
     setSpeak(next)
@@ -1195,6 +1267,11 @@ export function App(): JSX.Element {
           prompt: event.prompt,
           choices: event.choices
         })
+      } else if (event.type === 'pitcher_proposal_request') {
+        // The agent proposed a scheduled task. Open a pre-filled editor; the
+        // loop stays blocked until saveProposedPitcher()/cancelProposedPitcher()
+        // answers. The user reviews the trigger and grants the tool whitelist.
+        setPitcherProposal({ id: event.id, draft: event.draft })
       } else if (event.type === 'context_usage') {
         // Live in-flight prompt size (tool calls/results included) , keep the
         // usage badge honest while the agent works, not just between turns.
@@ -1486,6 +1563,15 @@ export function App(): JSX.Element {
         )}
       </div>
 
+      {runningPitchers.length > 0 && (
+        <PourBar
+          pitchers={pitchers}
+          runningIds={runningPitchers}
+          onStop={(id) => window.api.cancelPitcher(id)}
+          onManage={() => setActivePanel('pitchers')}
+        />
+      )}
+
       {plan && plan.length > 0 && (
         <PlanBar
           steps={plan}
@@ -1640,7 +1726,7 @@ export function App(): JSX.Element {
 
       <footer className="statusbar">
         {context !== null && (
-          <div className="context-control statusbar-item">
+          <div className="context-control statusbar-item" ref={contextPanelRef}>
             <button
               className="context-size"
               onClick={() => togglePanel('context')}
@@ -1666,7 +1752,7 @@ export function App(): JSX.Element {
           </div>
         )}
         {context !== null && (
-          <div className="context-control statusbar-item">
+          <div className="context-control statusbar-item" ref={replyCapPanelRef}>
             <button
               className="context-size"
               onClick={() => togglePanel('replycap')}
@@ -1693,7 +1779,7 @@ export function App(): JSX.Element {
           </div>
         )}
         {breakdown !== null && (
-          <div className="context-control statusbar-item">
+          <div className="context-control statusbar-item" ref={usagePanelRef}>
             <ContextUsageBadge
               breakdown={breakdown}
               open={activePanel === 'usage'}
@@ -1710,7 +1796,7 @@ export function App(): JSX.Element {
           </div>
         )}
         <div className="statusbar-right">
-          <div className="context-control statusbar-item server-connection">
+          <div className="context-control statusbar-item server-connection" ref={connectionPanelRef}>
             <button
               className={`server-status ${serverStatus}`}
               onClick={() => togglePanel('connection')}
@@ -1738,7 +1824,7 @@ export function App(): JSX.Element {
               />
             )}
           </div>
-          <div className="statusbar-item models-control">
+          <div className="statusbar-item models-control" ref={modelsControlPanelRef}>
             <button
               className={`statusbar-btn ${
                 downloadPercent != null ? 'is-downloading' : modelLoading ? 'is-loading' : ''
@@ -1837,10 +1923,51 @@ export function App(): JSX.Element {
         <Pitchers
           pitchers={pitchers}
           tools={tools}
+          runningIds={runningPitchers}
           onChanged={setPitchers}
           onOpenSession={openSession}
           onClose={closePanel}
         />
+      )}
+      {pitcherProposal && (
+        <div className="pantry-overlay history-overlay" onClick={cancelProposedPitcher}>
+          <aside className="pantry history-panel" onClick={(e) => e.stopPropagation()}>
+            <header className="pantry-head">
+              <div>
+                <h2>
+                  <PitcherIcon /> Review scheduled task
+                </h2>
+                <p className="pantry-sub">
+                  The agent drafted this Pitcher and pre-selected the tools it needs. Review the
+                  trigger and tools, then save it , nothing is scheduled until you do.
+                </p>
+              </div>
+              <button
+                className="pantry-close"
+                onClick={cancelProposedPitcher}
+                aria-label="Close"
+                title="Close"
+              >
+                ✕
+              </button>
+            </header>
+            <PitcherEditor
+              key={pitcherProposal.id}
+              initial={{
+                id: crypto.randomUUID(),
+                name: pitcherProposal.draft.name,
+                enabled: true,
+                prompt: pitcherProposal.draft.prompt,
+                trigger: pitcherProposal.draft.trigger,
+                output: pitcherProposal.draft.output,
+                allowedTools: pitcherProposal.draft.allowedTools
+              }}
+              tools={tools}
+              onCancel={cancelProposedPitcher}
+              onSave={saveProposedPitcher}
+            />
+          </aside>
+        </div>
       )}
       {activePanel === 'models' && (
         <Models
@@ -2421,12 +2548,14 @@ function History({
 function Pitchers({
   pitchers,
   tools,
+  runningIds,
   onChanged,
   onOpenSession,
   onClose
 }: {
   pitchers: Pitcher[]
   tools: AgentTool[]
+  runningIds: string[]
   onChanged: (list: Pitcher[]) => void
   onOpenSession: (id: string) => void
   onClose: () => void
@@ -2440,7 +2569,7 @@ function Pitchers({
     enabled: true,
     prompt: 'Fetch a website and summarize the key points in a few bullets.',
     trigger: { type: 'daily', at: '08:00' },
-    output: 'napkin',
+    output: 'chat',
     allowedTools: []
   })
 
@@ -2519,21 +2648,56 @@ function Pitchers({
                     </span>
                     <span className="history-meta">
                       {describeTrigger(p)} · serves {p.output}
-                      {p.lastStatus === 'error' && ' · ⚠ last run failed'}
+                      {p.lastStatus === 'error' && (
+                        <span className="pitcher-failed">
+                          {' · ⚠ failed'}
+                          {p.lastError
+                            ? `: ${p.lastError.length > 80 ? `${p.lastError.slice(0, 80)}…` : p.lastError}`
+                            : ''}
+                        </span>
+                      )}
+                      {p.lastStatus === 'stopped' && ' · ⏹ stopped'}
                       {p.lastStatus === 'ok' && p.lastRunAt
                         ? ` · last ${new Date(p.lastRunAt).toLocaleString()}`
                         : ''}
                     </span>
                   </button>
-                  <button
-                    className="history-del"
-                    onClick={() => pour(p.id)}
-                    disabled={pouringId !== null}
-                    aria-label="Pour now"
-                    title="Pour now"
-                  >
-                    {pouringId === p.id ? '…' : '▶'}
-                  </button>
+                  {p.lastSessionId && (
+                    <button
+                      className="history-del"
+                      onClick={() => onOpenSession(p.lastSessionId!)}
+                      aria-label="Open last run"
+                      title={
+                        p.lastStatus === 'error'
+                          ? "Open the failed run's conversation to see what happened"
+                          : "Open the last run's conversation"
+                      }
+                    >
+                      {p.lastStatus === 'error' ? '⚠' : '🗒'}
+                    </button>
+                  )}
+                  {(runningIds.includes(p.id) || pouringId === p.id) ? (
+                    <button
+                      className="history-del pitcher-stop"
+                      onClick={() => window.api.cancelPitcher(p.id)}
+                      aria-label="Stop this pour"
+                      title="Stop this pour"
+                    >
+                      <span className="pitcher-stop-ring" aria-hidden="true">
+                        <span className="pitcher-stop-sq" />
+                      </span>
+                    </button>
+                  ) : (
+                    <button
+                      className="history-del"
+                      onClick={() => pour(p.id)}
+                      disabled={pouringId !== null}
+                      aria-label="Pour now"
+                      title="Pour now"
+                    >
+                      ▶
+                    </button>
+                  )}
                   <button
                     className="history-del"
                     onClick={() => toggle(p)}
@@ -2693,6 +2857,12 @@ function PitcherEditor({
             </label>
           ))}
         </div>
+        {tools.length > 0 && (
+          <em className="pitcher-hint">
+            Don&apos;t see a tool you need? Enable its server in the Pantry, then reopen this
+            editor , only connected tools can be added.
+          </em>
+        )}
       </div>
 
       <div className="pitcher-actions">
@@ -3232,6 +3402,72 @@ function formatBytes(bytes: number): string {
 // plan. Collapsed, it summarizes the current step and overall progress (e.g.
 // "Creating README.md… (2/4)"); expanded, it reveals the full checklist. Driven
 // by the update_plan tool's plan_updated events.
+// A sticky bar shown above the composer while one or more Pitchers pour in the
+// background. A lone pour shows an inline row with its own Stop button. Two or
+// more collapse into a single stacked chip with a count badge , so a burst of
+// concurrent pours never grows the bar tall enough to crowd the composer , that
+// the user taps to manage (and stop) them all in the Pitchers panel.
+function PourBar({
+  pitchers,
+  runningIds,
+  onStop,
+  onManage
+}: {
+  pitchers: Pitcher[]
+  runningIds: string[]
+  onStop: (id: string) => void
+  onManage: () => void
+}): JSX.Element {
+  const nameFor = (id: string): string => pitchers.find((p) => p.id === id)?.name ?? 'Pitcher'
+
+  if (runningIds.length > 1) {
+    return (
+      <div className="pour-bar">
+        <span className="pour-bar-track" aria-hidden="true" />
+        <button
+          className="pour-bar-stacked"
+          onClick={onManage}
+          title="Manage the running pours in the Pitchers panel"
+        >
+          <span className="pour-bar-emoji" aria-hidden="true">
+            🫗
+          </span>
+          <span className="pour-bar-label">
+            <b>{runningIds.length} Pitchers pouring…</b>
+            <span className="pour-bar-sub">{runningIds.map(nameFor).join(', ')}</span>
+          </span>
+          <span className="pour-bar-manage">Manage →</span>
+        </button>
+      </div>
+    )
+  }
+
+  const id = runningIds[0]
+  return (
+    <div className="pour-bar">
+      <span className="pour-bar-track" aria-hidden="true" />
+      <div className="pour-bar-row">
+        <span className="pour-bar-emoji" aria-hidden="true">
+          🫗
+        </span>
+        <span className="pour-bar-label">
+          Pouring <b>“{nameFor(id)}”</b>
+          <span className="pour-bar-sub">Running in the background</span>
+        </span>
+        <button
+          className="pour-bar-stop"
+          onClick={() => onStop(id)}
+          title="Stop this pour"
+          aria-label={`Stop pouring ${nameFor(id)}`}
+        >
+          <span className="pour-bar-stop-sq" aria-hidden="true" />
+          Stop
+        </button>
+      </div>
+    </div>
+  )
+}
+
 function PlanBar({
   steps,
   expanded,
