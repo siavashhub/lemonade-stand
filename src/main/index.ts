@@ -848,6 +848,13 @@ function emitPitcher(evt: PitcherEvent): void {
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('pitcher:event', evt)
 }
 
+// Hard ceiling on how long a single headless pour may run. A scheduled task has
+// no user watching to hit Stop, so without this a hung tool call (e.g. a fetch
+// that never returns) would leave the pour executing forever , no conversation,
+// no status, just "still running" in the logs. On timeout the pour is aborted
+// and recorded as a failure so it always persists something inspectable.
+const POUR_TIMEOUT_MS = 5 * 60_000
+
 // Run one Pitcher end-to-end. Auto-approves only tools on its allowlist; every
 // other tool call is denied so a scheduled task can't be steered (e.g. by
 // injected web content) into actions it was never granted. Every pour , success
@@ -901,16 +908,18 @@ async function pourPitcher(p: Pitcher): Promise<PitcherRunResult> {
   // so a run that failed because a needed tool wasn't enabled is diagnosable.
   // The denial carries a Pitcher-specific reason so the model and transcript say
   // *why* it was blocked (not in this task's allow-list) rather than the
-  // misleading "denied by user".
-  const approve: ApproveFn = ({ qualified, tool }) =>
-    Promise.resolve(
-      p.allowedTools.includes(qualified)
-        ? true
-        : {
-            allowed: false,
-            reason: `The "${tool}" tool is not in this scheduled task's allowed tools, so it was blocked. To let this task use it, edit the Pitcher and check the tool (it must first be connected in the Pantry).`
-          }
-    )
+  // misleading "denied by user". Blocked tools are recorded so the whole run can
+  // be flagged as a failure below (a task that couldn't use a tool it needed did
+  // not really succeed, even if the model then replied "sorry, I can't").
+  const blockedTools = new Set<string>()
+  const approve: ApproveFn = ({ qualified, tool }) => {
+    if (p.allowedTools.includes(qualified)) return Promise.resolve(true)
+    blockedTools.add(tool)
+    return Promise.resolve({
+      allowed: false,
+      reason: `The "${tool}" tool is not in this scheduled task's allowed tools, so it was blocked. To let this task use it, edit the Pitcher and check the tool (it must first be connected in the Pantry).`
+    })
+  }
 
   let lastErr: unknown = null
   for (let attempt = 0; attempt < 2; attempt++) {
@@ -919,10 +928,26 @@ async function pourPitcher(p: Pitcher): Promise<PitcherRunResult> {
     emittedError = null
     entries = []
     const abort = new AbortController()
+    let timedOut = false
+    // Bound the pour: race the run against a deadline so a hung tool call can't
+    // leave it executing forever with nothing ever saved. On timeout we abort
+    // and reject, so the pour drops into the failure path and still persists.
+    let timer: NodeJS.Timeout | undefined
+    const deadline = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => {
+        timedOut = true
+        abort.abort()
+        reject(
+          new Error(
+            `Pour timed out after ${Math.round(POUR_TIMEOUT_MS / 60000)} minutes , a tool call may have hung.`
+          )
+        )
+      }, POUR_TIMEOUT_MS)
+    })
     try {
       // No onLimit/askNapkin: a headless pour must not block on user input, so
       // the loop stops at its step budget and skips clarification instead.
-      await agent.run(messages, emit, approve, abort.signal)
+      await Promise.race([agent.run(messages, emit, approve, abort.signal), deadline])
       // An emitted error means the loop gave up without a real answer; treat it
       // as a failed attempt so it retries and, if it persists, is recorded as an
       // error rather than a success.
@@ -934,6 +959,11 @@ async function pourPitcher(p: Pitcher): Promise<PitcherRunResult> {
       break
     } catch (err) {
       lastErr = err
+      // A timeout won't fix itself on retry (the tool call is still hung), so
+      // stop rather than burning another full timeout window.
+      if (timedOut) break
+    } finally {
+      if (timer) clearTimeout(timer)
     }
   }
 
@@ -941,12 +971,23 @@ async function pourPitcher(p: Pitcher): Promise<PitcherRunResult> {
   const list = readPitchers(appPath)
   const idx = list.findIndex((x) => x.id === p.id)
 
-  const failed = lastErr != null
-  const error = failed
+  let failed = lastErr != null
+  let error = failed
     ? lastErr instanceof Error
       ? lastErr.message
       : String(lastErr)
     : undefined
+
+  // A pour that was blocked from a tool it tried to use didn't really do its job,
+  // even if the model then produced a "sorry, I can't" reply. Flag it as a
+  // failure so the Pitchers panel shows the red indicator and the user knows to
+  // grant the tool, instead of a misleading "ok".
+  if (!failed && blockedTools.size > 0) {
+    failed = true
+    const names = [...blockedTools].map((t) => `"${t}"`).join(', ')
+    const plural = blockedTools.size > 1
+    error = `This task tried to use ${names} but ${plural ? 'those tools are' : 'that tool is'} not in its allowed tools. Edit the Pitcher to allow ${plural ? 'them' : 'it'} (and make sure the tool's server is connected in the Pantry).`
+  }
 
   // Always persist the run as a saved conversation , success or failure , so the
   // user can reopen it and see exactly what happened. Honor a napkin pour's
