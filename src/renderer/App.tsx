@@ -366,6 +366,34 @@ export function App(): JSX.Element {
   const [activePanel, setActivePanel] = useState<Panel | null>(null)
   const togglePanel = (p: Panel): void => setActivePanel((cur) => (cur === p ? null : p))
   const closePanel = (): void => setActivePanel(null)
+  // The footer popovers (context, replycap, usage, connection, loaded) are
+  // small anchored dropdowns with no backdrop of their own , unlike the
+  // full-screen panels (Pantry, History, Models, …) which already close on a
+  // backdrop click. Each wrapper below is ref'd so a pointerdown anywhere
+  // outside the open popover's own wrapper closes it, matching how the other
+  // panels behave instead of requiring the explicit × button.
+  const contextPanelRef = useRef<HTMLDivElement>(null)
+  const replyCapPanelRef = useRef<HTMLDivElement>(null)
+  const usagePanelRef = useRef<HTMLDivElement>(null)
+  const connectionPanelRef = useRef<HTMLDivElement>(null)
+  const modelsControlPanelRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const refByPanel: Partial<Record<Panel, React.RefObject<HTMLDivElement | null>>> = {
+      context: contextPanelRef,
+      replycap: replyCapPanelRef,
+      usage: usagePanelRef,
+      connection: connectionPanelRef,
+      loaded: modelsControlPanelRef
+    }
+    const ref = activePanel ? refByPanel[activePanel] : undefined
+    if (!ref) return
+    function handlePointerDown(e: PointerEvent): void {
+      if (ref?.current && !ref.current.contains(e.target as Node)) closePanel()
+    }
+    document.addEventListener('pointerdown', handlePointerDown)
+    return () => document.removeEventListener('pointerdown', handlePointerDown)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activePanel])
   // Model download/loading state lifted to the app shell so the Models button in
   // the status bar can double as a progress indicator even when the Models panel
   // is closed. `downloads` mirrors the server's active jobs; `modelBusyId` is set
@@ -1680,7 +1708,7 @@ export function App(): JSX.Element {
 
       <footer className="statusbar">
         {context !== null && (
-          <div className="context-control statusbar-item">
+          <div className="context-control statusbar-item" ref={contextPanelRef}>
             <button
               className="context-size"
               onClick={() => togglePanel('context')}
@@ -1706,7 +1734,7 @@ export function App(): JSX.Element {
           </div>
         )}
         {context !== null && (
-          <div className="context-control statusbar-item">
+          <div className="context-control statusbar-item" ref={replyCapPanelRef}>
             <button
               className="context-size"
               onClick={() => togglePanel('replycap')}
@@ -1733,7 +1761,7 @@ export function App(): JSX.Element {
           </div>
         )}
         {breakdown !== null && (
-          <div className="context-control statusbar-item">
+          <div className="context-control statusbar-item" ref={usagePanelRef}>
             <ContextUsageBadge
               breakdown={breakdown}
               open={activePanel === 'usage'}
@@ -1750,7 +1778,7 @@ export function App(): JSX.Element {
           </div>
         )}
         <div className="statusbar-right">
-          <div className="context-control statusbar-item server-connection">
+          <div className="context-control statusbar-item server-connection" ref={connectionPanelRef}>
             <button
               className={`server-status ${serverStatus}`}
               onClick={() => togglePanel('connection')}
@@ -1778,7 +1806,7 @@ export function App(): JSX.Element {
               />
             )}
           </div>
-          <div className="statusbar-item models-control">
+          <div className="statusbar-item models-control" ref={modelsControlPanelRef}>
             <button
               className={`statusbar-btn ${
                 downloadPercent != null ? 'is-downloading' : modelLoading ? 'is-loading' : ''
