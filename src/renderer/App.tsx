@@ -416,6 +416,10 @@ export function App(): JSX.Element {
   // auto-generated title once the first exchange has happened.
   const [sessions, setSessions] = useState<SessionSummary[]>([])
   const [pitchers, setPitchers] = useState<Pitcher[]>([])
+  // Ids of Pitchers currently pouring in the background, driven by
+  // pitcher_started / pitcher_finished events. Backs the sticky "pouring…" bar
+  // shown above the composer, each row with its own Stop button.
+  const [runningPitchers, setRunningPitchers] = useState<string[]>([])
   const [sessionId, setSessionId] = useState<string>(() => crypto.randomUUID())
   const [currentTitle, setCurrentTitle] = useState('')
   const createdAtRef = useRef<number>(Date.now())
@@ -735,7 +739,12 @@ export function App(): JSX.Element {
   useEffect(() => {
     return window.api.onPitcherEvent((evt: PitcherEvent) => {
       refreshPitchers()
-      if (evt.type === 'pitcher_finished') refreshSessions()
+      if (evt.type === 'pitcher_started') {
+        setRunningPitchers((ids) => (ids.includes(evt.id) ? ids : [...ids, evt.id]))
+      } else if (evt.type === 'pitcher_finished') {
+        setRunningPitchers((ids) => ids.filter((x) => x !== evt.id))
+        refreshSessions()
+      }
     })
   }, [])
 
@@ -1554,6 +1563,15 @@ export function App(): JSX.Element {
         )}
       </div>
 
+      {runningPitchers.length > 0 && (
+        <PourBar
+          pitchers={pitchers}
+          runningIds={runningPitchers}
+          onStop={(id) => window.api.cancelPitcher(id)}
+          onManage={() => setActivePanel('pitchers')}
+        />
+      )}
+
       {plan && plan.length > 0 && (
         <PlanBar
           steps={plan}
@@ -1905,6 +1923,7 @@ export function App(): JSX.Element {
         <Pitchers
           pitchers={pitchers}
           tools={tools}
+          runningIds={runningPitchers}
           onChanged={setPitchers}
           onOpenSession={openSession}
           onClose={closePanel}
@@ -2529,12 +2548,14 @@ function History({
 function Pitchers({
   pitchers,
   tools,
+  runningIds,
   onChanged,
   onOpenSession,
   onClose
 }: {
   pitchers: Pitcher[]
   tools: AgentTool[]
+  runningIds: string[]
   onChanged: (list: Pitcher[]) => void
   onOpenSession: (id: string) => void
   onClose: () => void
@@ -2635,6 +2656,7 @@ function Pitchers({
                             : ''}
                         </span>
                       )}
+                      {p.lastStatus === 'stopped' && ' · ⏹ stopped'}
                       {p.lastStatus === 'ok' && p.lastRunAt
                         ? ` · last ${new Date(p.lastRunAt).toLocaleString()}`
                         : ''}
@@ -2654,15 +2676,28 @@ function Pitchers({
                       {p.lastStatus === 'error' ? '⚠' : '🗒'}
                     </button>
                   )}
-                  <button
-                    className="history-del"
-                    onClick={() => pour(p.id)}
-                    disabled={pouringId !== null}
-                    aria-label="Pour now"
-                    title="Pour now"
-                  >
-                    {pouringId === p.id ? '…' : '▶'}
-                  </button>
+                  {(runningIds.includes(p.id) || pouringId === p.id) ? (
+                    <button
+                      className="history-del pitcher-stop"
+                      onClick={() => window.api.cancelPitcher(p.id)}
+                      aria-label="Stop this pour"
+                      title="Stop this pour"
+                    >
+                      <span className="pitcher-stop-ring" aria-hidden="true">
+                        <span className="pitcher-stop-sq" />
+                      </span>
+                    </button>
+                  ) : (
+                    <button
+                      className="history-del"
+                      onClick={() => pour(p.id)}
+                      disabled={pouringId !== null}
+                      aria-label="Pour now"
+                      title="Pour now"
+                    >
+                      ▶
+                    </button>
+                  )}
                   <button
                     className="history-del"
                     onClick={() => toggle(p)}
@@ -3367,6 +3402,73 @@ function formatBytes(bytes: number): string {
 // plan. Collapsed, it summarizes the current step and overall progress (e.g.
 // "Creating README.md… (2/4)"); expanded, it reveals the full checklist. Driven
 // by the update_plan tool's plan_updated events.
+// A sticky bar shown above the composer while one or more Pitchers pour in the
+// background. A lone pour shows an inline row with its own Stop button. Two or
+// more collapse into a single stacked chip with a count badge , so a burst of
+// concurrent pours never grows the bar tall enough to crowd the composer , that
+// the user taps to manage (and stop) them all in the Pitchers panel.
+function PourBar({
+  pitchers,
+  runningIds,
+  onStop,
+  onManage
+}: {
+  pitchers: Pitcher[]
+  runningIds: string[]
+  onStop: (id: string) => void
+  onManage: () => void
+}): JSX.Element {
+  const nameFor = (id: string): string => pitchers.find((p) => p.id === id)?.name ?? 'Pitcher'
+
+  if (runningIds.length > 1) {
+    return (
+      <div className="pour-bar">
+        <span className="pour-bar-track" aria-hidden="true" />
+        <button
+          className="pour-bar-stacked"
+          onClick={onManage}
+          title="Manage the running pours in the Pitchers panel"
+        >
+          <span className="pour-bar-stack-icon" aria-hidden="true">
+            <span className="pour-bar-emoji">🫗</span>
+            <span className="pour-bar-badge">{runningIds.length}</span>
+          </span>
+          <span className="pour-bar-label">
+            <b>{runningIds.length} Pitchers pouring…</b>
+            <span className="pour-bar-sub">{runningIds.map(nameFor).join(', ')}</span>
+          </span>
+          <span className="pour-bar-manage">Manage →</span>
+        </button>
+      </div>
+    )
+  }
+
+  const id = runningIds[0]
+  return (
+    <div className="pour-bar">
+      <span className="pour-bar-track" aria-hidden="true" />
+      <div className="pour-bar-row">
+        <span className="pour-bar-emoji" aria-hidden="true">
+          🫗
+        </span>
+        <span className="pour-bar-label">
+          Pouring <b>“{nameFor(id)}”</b>
+          <span className="pour-bar-sub">Running in the background</span>
+        </span>
+        <button
+          className="pour-bar-stop"
+          onClick={() => onStop(id)}
+          title="Stop this pour"
+          aria-label={`Stop pouring ${nameFor(id)}`}
+        >
+          <span className="pour-bar-stop-sq" aria-hidden="true" />
+          Stop
+        </button>
+      </div>
+    </div>
+  )
+}
+
 function PlanBar({
   steps,
   expanded,

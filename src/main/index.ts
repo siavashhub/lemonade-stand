@@ -848,6 +848,14 @@ function emitPitcher(evt: PitcherEvent): void {
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('pitcher:event', evt)
 }
 
+// In-flight pours keyed by Pitcher id so the renderer's Stop button can abort a
+// running background pour. Populated for the duration of each pour attempt and
+// cleared as soon as it settles.
+const runningPours = new Map<string, AbortController>()
+// Ids the user explicitly stopped, so the pour records a neutral "stopped"
+// outcome and skips its retry instead of treating the abort as a real failure.
+const cancelledPours = new Set<string>()
+
 // Hard ceiling on how long a single headless pour may run. A scheduled task has
 // no user watching to hit Stop, so without this a hung tool call (e.g. a fetch
 // that never returns) would leave the pour executing forever , no conversation,
@@ -863,6 +871,9 @@ const POUR_TIMEOUT_MS = 5 * 60_000
 // vanishing. A desktop notification is raised when the window isn't focused, and
 // a bounded retry guards against a flaky local model.
 async function pourPitcher(p: Pitcher): Promise<PitcherRunResult> {
+  // Clear any stale cancel flag from a prior pour of this Pitcher so a Stop that
+  // landed just as the last run finished can't wrongly mark this fresh run.
+  cancelledPours.delete(p.id)
   emitPitcher({ type: 'pitcher_started', id: p.id })
 
   // A napkin pour steers the model to present its answer as a rich artifact via
@@ -928,6 +939,9 @@ async function pourPitcher(p: Pitcher): Promise<PitcherRunResult> {
     emittedError = null
     entries = []
     const abort = new AbortController()
+    // Expose this attempt's controller so the renderer's Stop button can abort
+    // a running pour; cleared in the finally below once the attempt settles.
+    runningPours.set(p.id, abort)
     let timedOut = false
     // Bound the pour: race the run against a deadline so a hung tool call can't
     // leave it executing forever with nothing ever saved. On timeout we abort
@@ -962,8 +976,11 @@ async function pourPitcher(p: Pitcher): Promise<PitcherRunResult> {
       // A timeout won't fix itself on retry (the tool call is still hung), so
       // stop rather than burning another full timeout window.
       if (timedOut) break
+      // The user hit Stop; don't retry, drop into the "stopped" path below.
+      if (cancelledPours.has(p.id)) break
     } finally {
       if (timer) clearTimeout(timer)
+      if (runningPours.get(p.id) === abort) runningPours.delete(p.id)
     }
   }
 
@@ -971,18 +988,24 @@ async function pourPitcher(p: Pitcher): Promise<PitcherRunResult> {
   const list = readPitchers(appPath)
   const idx = list.findIndex((x) => x.id === p.id)
 
-  let failed = lastErr != null
-  let error = failed
-    ? lastErr instanceof Error
-      ? lastErr.message
-      : String(lastErr)
-    : undefined
+  // A user-initiated Stop is not a failure: record it as a neutral "stopped"
+  // outcome so the panel shows a calm indicator (no red ⚠, no failure toast).
+  const stopped = cancelledPours.delete(p.id)
+
+  let failed = !stopped && lastErr != null
+  let error = stopped
+    ? 'You stopped this pour before it finished.'
+    : failed
+      ? lastErr instanceof Error
+        ? lastErr.message
+        : String(lastErr)
+      : undefined
 
   // A pour that was blocked from a tool it tried to use didn't really do its job,
   // even if the model then produced a "sorry, I can't" reply. Flag it as a
   // failure so the Pitchers panel shows the red indicator and the user knows to
   // grant the tool, instead of a misleading "ok".
-  if (!failed && blockedTools.size > 0) {
+  if (!failed && !stopped && blockedTools.size > 0) {
     failed = true
     const names = [...blockedTools].map((t) => `"${t}"`).join(', ')
     const plural = blockedTools.size > 1
@@ -993,19 +1016,21 @@ async function pourPitcher(p: Pitcher): Promise<PitcherRunResult> {
   // user can reopen it and see exactly what happened. Honor a napkin pour's
   // output preference on success by synthesizing a Napkin when the model didn't.
   const sessionId = randomUUID()
-  if (!failed && !napkin && p.output === 'napkin' && finalText.trim())
+  if (!failed && !stopped && !napkin && p.output === 'napkin' && finalText.trim())
     napkin = { title: p.name, kind: 'markdown', content: finalText }
   if (napkin && !entries.some((e) => e.kind === 'napkin')) entries.push({ kind: 'napkin', napkin })
   if (entries.length === 0)
     entries.push(
-      failed
-        ? { kind: 'error', text: error ?? 'The pour failed.' }
-        : { kind: 'assistant', text: finalText || '(no reply)' }
+      stopped
+        ? { kind: 'assistant', text: finalText || 'You stopped this pour before it finished.' }
+        : failed
+          ? { kind: 'error', text: error ?? 'The pour failed.' }
+          : { kind: 'assistant', text: finalText || '(no reply)' }
     )
 
   writeSession(appPath, {
     id: sessionId,
-    title: `${failed ? '⚠️' : '🥤'} ${p.name}`,
+    title: `${stopped ? '⏹️' : failed ? '⚠️' : '🥤'} ${p.name}`,
     createdAt: now,
     updatedAt: now,
     messageCount: 2,
@@ -1015,19 +1040,23 @@ async function pourPitcher(p: Pitcher): Promise<PitcherRunResult> {
   })
 
   if (idx >= 0) {
-    list[idx] = failed
-      ? { ...list[idx], lastStatus: 'error', lastError: error, lastSessionId: sessionId }
-      : {
-          ...list[idx],
-          lastRunAt: now,
-          lastStatus: 'ok',
-          lastError: undefined,
-          lastSessionId: sessionId
-        }
+    list[idx] = stopped
+      ? { ...list[idx], lastStatus: 'stopped', lastError: undefined, lastSessionId: sessionId }
+      : failed
+        ? { ...list[idx], lastStatus: 'error', lastError: error, lastSessionId: sessionId }
+        : {
+            ...list[idx],
+            lastRunAt: now,
+            lastStatus: 'ok',
+            lastError: undefined,
+            lastSessionId: sessionId
+          }
     writePitchers(appPath, list)
   }
 
-  if (mainWindow && !mainWindow.isFocused() && Notification.isSupported())
+  // No desktop notification for a user-initiated Stop , they're right here and
+  // already know they stopped it.
+  if (!stopped && mainWindow && !mainWindow.isFocused() && Notification.isSupported())
     new Notification(
       failed
         ? { title: `Pitcher failed: ${p.name}`, body: error ?? 'Open the run to see what happened.' }
@@ -1037,8 +1066,8 @@ async function pourPitcher(p: Pitcher): Promise<PitcherRunResult> {
           }
     ).show()
 
-  emitPitcher({ type: 'pitcher_finished', id: p.id, ok: !failed, sessionId, error })
-  return { id: p.id, ok: !failed, sessionId, error }
+  emitPitcher({ type: 'pitcher_finished', id: p.id, ok: !failed, sessionId, error, stopped })
+  return { id: p.id, ok: !failed, sessionId, error, stopped }
 }
 
 const scheduler = new PitcherScheduler(
@@ -1071,6 +1100,14 @@ ipcMain.handle('pitcher:run', (_event, id: string): Promise<PitcherRunResult> =>
   const p = readPitchers(appPath).find((x) => x.id === id)
   if (!p) return Promise.resolve({ id, ok: false, error: 'Pitcher not found' })
   return pourPitcher(p)
+})
+
+// Renderer's Stop button on the "pouring…" bar: halt an in-flight pour. Mark it
+// cancelled so the pour skips its retry and records a neutral "stopped" outcome,
+// then abort the current attempt's signal so the agent loop unwinds.
+ipcMain.handle('pitcher:cancel', (_event, id: string) => {
+  cancelledPours.add(id)
+  runningPours.get(id)?.abort()
 })
 
 // --- Lifecycle ---------------------------------------------------------------

@@ -347,7 +347,7 @@ export interface Pitcher {
   allowedTools: string[]
   /** Epoch ms of the last successful pour, for daily catch-up on launch. */
   lastRunAt?: number
-  lastStatus?: 'ok' | 'error'
+  lastStatus?: 'ok' | 'error' | 'stopped'
   lastError?: string
   /** Saved conversation id of the most recent pour (success OR failure), so the
    * user can open it from the Pitchers panel to see exactly what happened. */
@@ -361,12 +361,21 @@ export interface PitcherRunResult {
   /** Saved conversation id, when the pour produced one. */
   sessionId?: string
   error?: string
+  /** True when the user hit Stop before the pour finished (not a failure). */
+  stopped?: boolean
 }
 
 /** Pushed to the renderer as a Pitcher's run state changes. */
 export type PitcherEvent =
   | { type: 'pitcher_started'; id: string }
-  | { type: 'pitcher_finished'; id: string; ok: boolean; sessionId?: string; error?: string }
+  | {
+      type: 'pitcher_finished'
+      id: string
+      ok: boolean
+      sessionId?: string
+      error?: string
+      stopped?: boolean
+    }
 
 /** A model-proposed scheduled task awaiting the user's review in a pre-filled
  * editor. The proposed `allowedTools` are pre-selected for convenience but the
@@ -565,6 +574,8 @@ export interface RendererApi {
   deletePitcher(id: string): Promise<Pitcher[]>
   /** Pour a Pitcher immediately ("Pour now"). */
   runPitcher(id: string): Promise<PitcherRunResult>
+  /** Stop an in-flight pour (scheduled or manual) started for this Pitcher. */
+  cancelPitcher(id: string): Promise<void>
   /** Subscribe to Pitcher run-state events. Returns an unsubscribe function. */
   onPitcherEvent(handler: (event: PitcherEvent) => void): () => void
   /** Minimize the window. */

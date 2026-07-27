@@ -215,6 +215,10 @@ const api: RendererApi = {
     return ipcRenderer.invoke('pitcher:run', id)
   },
 
+  cancelPitcher(id: string) {
+    return ipcRenderer.invoke('pitcher:cancel', id)
+  },
+
   onPitcherEvent(handler: (event: PitcherEvent) => void): () => void {
     const listener = (_event: unknown, payload: PitcherEvent): void => handler(payload)
     ipcRenderer.on('pitcher:event', listener)
