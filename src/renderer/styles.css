@@ -1708,59 +1708,6 @@ body {
   background: var(--accent-soft);
 }
 
-.pour-bar-stack-icon {
-  position: relative;
-  display: inline-block;
-  flex: 0 0 auto;
-  width: 22px;
-  height: 20px;
-}
-
-/* Two offset cards behind the glass hint at a pile of running tasks. */
-.pour-bar-stack-icon::before,
-.pour-bar-stack-icon::after {
-  content: '';
-  position: absolute;
-  inset: 1px 2px;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  background: var(--panel);
-}
-
-.pour-bar-stack-icon::before {
-  transform: translate(5px, -4px);
-  opacity: 0.5;
-}
-
-.pour-bar-stack-icon::after {
-  transform: translate(2.5px, -2px);
-  opacity: 0.8;
-}
-
-.pour-bar-stack-icon .pour-bar-emoji {
-  position: relative;
-  z-index: 1;
-  font-size: 15px;
-}
-
-.pour-bar-badge {
-  position: absolute;
-  z-index: 2;
-  top: -7px;
-  right: -9px;
-  min-width: 16px;
-  height: 16px;
-  padding: 0 4px;
-  border-radius: 999px;
-  background: var(--accent);
-  color: #1a1a1a;
-  font-size: 10px;
-  font-weight: 800;
-  line-height: 16px;
-  text-align: center;
-  box-sizing: border-box;
-}
-
 .pour-bar-manage {
   flex: 0 0 auto;
   color: var(--accent-deep);

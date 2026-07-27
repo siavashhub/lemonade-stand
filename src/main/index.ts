@@ -985,7 +985,16 @@ async function pourPitcher(p: Pitcher): Promise<PitcherRunResult> {
   }
 
   const now = Date.now()
-  const list = readPitchers(appPath)
+  // Read defensively: a concurrent pour (e.g. a scheduled one racing this manual
+  // run) may have the file mid-write, and a read/parse hiccup here must never
+  // skip the pitcher_finished event below , that would strand the renderer's
+  // Stop indicator on a run that has actually ended.
+  let list: Pitcher[] = []
+  try {
+    list = readPitchers(appPath)
+  } catch (err) {
+    console.error(`[pitcher] failed to read pitchers while finalizing "${p.name}":`, err)
+  }
   const idx = list.findIndex((x) => x.id === p.id)
 
   // A user-initiated Stop is not a failure: record it as a neutral "stopped"
@@ -1028,16 +1037,21 @@ async function pourPitcher(p: Pitcher): Promise<PitcherRunResult> {
           : { kind: 'assistant', text: finalText || '(no reply)' }
     )
 
-  writeSession(appPath, {
-    id: sessionId,
-    title: `${stopped ? '⏹️' : failed ? '⚠️' : '🥤'} ${p.name}`,
-    createdAt: now,
-    updatedAt: now,
-    messageCount: 2,
-    model: config.model,
-    history: [...messages, { role: 'assistant', content: finalText }],
-    entries
-  })
+  // Persist defensively , a failed write must not skip the finished event.
+  try {
+    writeSession(appPath, {
+      id: sessionId,
+      title: `${stopped ? '⏹️' : failed ? '⚠️' : '🥤'} ${p.name}`,
+      createdAt: now,
+      updatedAt: now,
+      messageCount: 2,
+      model: config.model,
+      history: [...messages, { role: 'assistant', content: finalText }],
+      entries
+    })
+  } catch (err) {
+    console.error(`[pitcher] failed to save pour session for "${p.name}":`, err)
+  }
 
   if (idx >= 0) {
     list[idx] = stopped
@@ -1051,20 +1065,33 @@ async function pourPitcher(p: Pitcher): Promise<PitcherRunResult> {
             lastError: undefined,
             lastSessionId: sessionId
           }
-    writePitchers(appPath, list)
+    try {
+      writePitchers(appPath, list)
+    } catch (err) {
+      console.error(`[pitcher] failed to persist status for "${p.name}":`, err)
+    }
   }
 
   // No desktop notification for a user-initiated Stop , they're right here and
-  // already know they stopped it.
-  if (!stopped && mainWindow && !mainWindow.isFocused() && Notification.isSupported())
-    new Notification(
-      failed
-        ? { title: `Pitcher failed: ${p.name}`, body: error ?? 'Open the run to see what happened.' }
-        : {
-            title: `Fresh pour: ${p.name}`,
-            body: finalText.slice(0, 120) || 'Ready in your history.'
-          }
-    ).show()
+  // already know they stopped it. Guarded so a notification failure can't skip
+  // the finished event below.
+  if (!stopped && mainWindow && !mainWindow.isFocused() && Notification.isSupported()) {
+    try {
+      new Notification(
+        failed
+          ? {
+              title: `Pitcher failed: ${p.name}`,
+              body: error ?? 'Open the run to see what happened.'
+            }
+          : {
+              title: `Fresh pour: ${p.name}`,
+              body: finalText.slice(0, 120) || 'Ready in your history.'
+            }
+      ).show()
+    } catch (err) {
+      console.error(`[pitcher] failed to raise notification for "${p.name}":`, err)
+    }
+  }
 
   emitPitcher({ type: 'pitcher_finished', id: p.id, ok: !failed, sessionId, error, stopped })
   return { id: p.id, ok: !failed, sessionId, error, stopped }

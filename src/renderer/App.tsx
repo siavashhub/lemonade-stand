@@ -3429,9 +3429,8 @@ function PourBar({
           onClick={onManage}
           title="Manage the running pours in the Pitchers panel"
         >
-          <span className="pour-bar-stack-icon" aria-hidden="true">
-            <span className="pour-bar-emoji">🫗</span>
-            <span className="pour-bar-badge">{runningIds.length}</span>
+          <span className="pour-bar-emoji" aria-hidden="true">
+            🫗
           </span>
           <span className="pour-bar-label">
             <b>{runningIds.length} Pitchers pouring…</b>
