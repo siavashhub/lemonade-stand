@@ -47,8 +47,8 @@ d('time MCP server (integration, uvx)', () => {
     const result = await manager.callTool('time__get_current_time', { timezone: 'UTC' })
     // The server returns JSON containing an ISO datetime; assert it mentions the
     // timezone and looks like a real time value rather than an error string.
-    expect(result).toContain('UTC')
-    expect(result).toMatch(/\d{4}-\d{2}-\d{2}/)
+    expect(result.text).toContain('UTC')
+    expect(result.text).toMatch(/\d{4}-\d{2}-\d{2}/)
   })
 })
 
@@ -78,13 +78,13 @@ d('sqlite MCP server (integration, uvx)', () => {
       query: "INSERT INTO sales (item, price) VALUES ('lemonade', 2.0), ('cookie', 1.0)"
     })
     const tables = await manager.callTool('sqlite__list_tables', {})
-    expect(tables).toContain('sales')
+    expect(tables.text).toContain('sales')
 
     const rows = await manager.callTool('sqlite__read_query', {
       query: 'SELECT item, price FROM sales ORDER BY price DESC'
     })
-    expect(rows).toContain('lemonade')
-    expect(rows).toContain('cookie')
+    expect(rows.text).toContain('lemonade')
+    expect(rows.text).toContain('cookie')
   })
 })
 
@@ -112,7 +112,7 @@ d('git MCP server (integration, uvx)', () => {
   it('reports the untracked file via git_status', async () => {
     expect(manager.getTools().map((t) => t.qualifiedName)).toContain('git__git_status')
     const status = await manager.callTool('git__git_status', { repo_path: repo })
-    expect(status).toContain('note.txt')
+    expect(status.text).toContain('note.txt')
   })
 })
 
@@ -135,7 +135,7 @@ d('fetch MCP server (integration, uvx, network)', () => {
     // The server prefixes the response with the URL, so example.com is always
     // present. iana.org is the stable IANA link in the page body, regardless of
     // how mcp-server-fetch renders the page heading.
-    expect(result.toLowerCase()).toContain('example.com')
-    expect(result.toLowerCase()).toContain('iana.org')
+    expect(result.text.toLowerCase()).toContain('example.com')
+    expect(result.text.toLowerCase()).toContain('iana.org')
   })
 })
